@@ -1,20 +1,17 @@
-name: TARGET DATE 1
+name: BMS
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: '10 * * * *'
-
-env:
-  DATE_CODE: 20260408
+    - cron: "30 * * * *"
+  workflow_dispatch:
 
 # 🔥 prevent overlapping runs
 concurrency:
-  group: target-date-1-${{ github.ref }}
+  group: bms-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  run-shard:
+  scrape:
     runs-on: ubuntu-latest
 
     strategy:
@@ -22,57 +19,76 @@ jobs:
       matrix:
         shard: [1,2,3,4,5,6,7,8,9,10]
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    env:
+      REPO: MintBox04/AllIndiaAdvance
 
+    steps:
+      # 🔒 Clone repo
+      - name: Clone Repo
+        run: |
+          git clone --depth=1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git
+
+      # 🐍 Setup Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
+      # ⚡ Cache pip
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip
+
+      # 📦 Install dependencies
       - name: Install dependencies
         run: |
+          cd AllIndiaAdvance
           python -m pip install --upgrade pip
           pip install playwright cloudscraper aiohttp pytz
           python -m playwright install --with-deps chromium
 
-      - name: Run Shard ${{ matrix.shard }}
+      # 🎬 Run scraper
+      - name: Run scraper
         run: |
-          echo "Running for DATE_CODE=$DATE_CODE"
+          cd AllIndiaAdvance
+
+          echo "🚀 Running shard ${{ matrix.shard }}"
 
           for i in {1..5}; do
             echo "Attempt $i"
 
             if [ "${{ matrix.shard }}" == "10" ]; then
-              python district_scraper.py $DATE_CODE && break
+              python district_scraper.py && break
             else
-              xvfb-run python run_bms.py ${{ matrix.shard }} $DATE_CODE && break
+              xvfb-run python run_bms.py ${{ matrix.shard }} && break
             fi
 
             echo "❌ Failed. Retrying..."
             sleep 10
           done
 
-      # 📦 Upload shard output (NO GIT PUSH HERE)
+      # 📦 Upload shard data as artifact (NO GIT PUSH HERE)
       - name: Upload shard data
         uses: actions/upload-artifact@v4
         with:
           name: shard-${{ matrix.shard }}
-          path: advance/data/
+          path: AllIndiaAdvance/advance/data/
 
 
-  merge-and-commit:
-    needs: run-shard
+  merge:
+    needs: scrape
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+
+    env:
+      REPO: MintBox04/AllIndiaAdvance
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      # 🔒 Clone repo
+      - name: Clone Repo
+        run: |
+          git clone --depth=1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git
 
       # 📥 Download all shard artifacts
       - name: Download all shards
@@ -80,33 +96,38 @@ jobs:
         with:
           path: shards
 
-      # 🗂 Merge all shard outputs
+      # 🗂 Move all shard data into repo
       - name: Merge shard folders
         run: |
-          mkdir -p advance/data/
+          mkdir -p AllIndiaAdvance/advance/data/
 
           for dir in shards/*; do
-            cp -r "$dir"/* advance/data/ || true
+            cp -r "$dir"/* AllIndiaAdvance/advance/data/ || true
           done
 
+      # 🐍 Setup Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
-      - name: Install Merge Dependencies
+      # 📦 Install dependencies
+      - name: Install dependencies
         run: |
-          pip install pytz
+          cd AllIndiaAdvance
+          python -m pip install --upgrade pip
+          pip install pytz numpy rapidfuzz
 
-      - name: Combine Shards
+      # 🔀 Run combine script
+      - name: Run merger
         run: |
-          echo "Combining for DATE_CODE=$DATE_CODE"
+          cd AllIndiaAdvance
 
           for i in {1..5}; do
             echo "Attempt $i"
 
-            if python combine_shards.py $DATE_CODE; then
-              echo "✅ Combine success"
+            if python combine_shards.py; then
+              echo "✅ Combine finished"
               break
             fi
 
@@ -114,14 +135,17 @@ jobs:
             sleep 10
           done
 
-      - name: Commit Combined Data
+      # 💾 Commit merged data
+      - name: Commit merged data
         run: |
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
+          cd AllIndiaAdvance
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add advance/data/
 
-          git commit -m "Merged data for $DATE_CODE ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes"
+          git commit -m "Merged BMS data ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes"
 
           # Safe push with retry
           for i in {1..5}; do
@@ -129,7 +153,7 @@ jobs:
 
             git pull --rebase origin main || true
 
-            if git push; then
+            if git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git; then
               echo "✅ Push succeeded"
               break
             fi
