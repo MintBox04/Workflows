@@ -69,7 +69,7 @@ jobs:
             sleep 10
           done
 
-      # 📦 Upload shard data as artifact (NO GIT PUSH HERE)
+      # 📦 Upload shard data as artifact
       - name: Upload shard data
         uses: actions/upload-artifact@v4
         with:
@@ -135,22 +135,30 @@ jobs:
             sleep 10
           done
 
-      # 💾 Commit merged data
+      # 💾 Commit merged data with Git LFS
       - name: Commit merged data
         run: |
           cd AllIndiaAdvance
+
+          # 🚀 Initialize Git LFS
+          git lfs install
+          
+          # Track the data directory (only needs to be run once, but safe to run every time)
+          git lfs track "advance/data/**"
+          git add .gitattributes
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add advance/data/
 
-          git commit -m "Merged BMS data ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes"
+          git commit -m "Merged BMS data with Git LFS ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes"
 
           # Safe push with retry
           for i in {1..5}; do
             echo "Push attempt $i"
 
+            # Use --rebase to keep history clean
             git pull --rebase origin main || true
 
             if git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git; then
