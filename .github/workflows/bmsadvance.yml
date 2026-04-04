@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        shard: [1,2,3,4,5,6,7,8,9,10]
 
     env:
       REPO: MintBox04/AllIndiaAdvance
@@ -39,20 +39,20 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('repo/requirements.txt') }}
+          key: ${{ runner.os }}-pip
 
       # 📦 Install dependencies
       - name: Install dependencies
         run: |
-          cd repo
+          cd AllIndiaAdvance
           python -m pip install --upgrade pip
           pip install playwright cloudscraper aiohttp pytz
           python -m playwright install --with-deps chromium
 
-      # 🎬 Run scraper (retry logic)
+      # 🎬 Run scraper
       - name: Run scraper
         run: |
-          cd repo
+          cd AllIndiaAdvance
 
           echo "🚀 Running shard ${{ matrix.shard }}"
 
@@ -69,32 +69,12 @@ jobs:
             sleep 10
           done
 
-      # 💾 Commit shard data
-      - name: Commit shard data
-        run: |
-          cd repo
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git add advance/data/
-
-          git commit -m "[skip ci] Shard ${{ matrix.shard }} update ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes"
-
-          sleep $((RANDOM % 10))
-
-          for i in {1..5}; do
-            echo "Push attempt $i"
-
-            git pull --rebase origin main || true
-
-            if git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git; then
-              echo "✅ Push succeeded"
-              break
-            fi
-
-            echo "❌ Push failed. Retrying..."
-            sleep 5
-          done
+      # 📦 Upload shard data as artifact (NO GIT PUSH HERE)
+      - name: Upload shard data
+        uses: actions/upload-artifact@v4
+        with:
+          name: shard-${{ matrix.shard }}
+          path: AllIndiaAdvance/advance/data/
 
 
   merge:
@@ -102,7 +82,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      REPO: MintBox04/AllIndiaAdvance  # 🔁 change this
+      REPO: MintBox04/AllIndiaAdvance
 
     steps:
       # 🔒 Clone repo
@@ -110,23 +90,19 @@ jobs:
         run: |
           git clone --depth=1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git
 
-      # 🔄 Ensure latest repo
-      - name: Ensure latest repo
+      # 📥 Download all shard artifacts
+      - name: Download all shards
+        uses: actions/download-artifact@v4
+        with:
+          path: shards
+
+      # 🗂 Move all shard data into repo
+      - name: Merge shard folders
         run: |
-          cd repo
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mkdir -p AllIndiaAdvance/advance/data/
 
-          for i in {1..5}; do
-            echo "Pull attempt $i"
-
-            if git pull --rebase origin main; then
-              echo "✅ Repo updated"
-              break
-            fi
-
-            echo "Retrying pull..."
-            sleep 3
+          for dir in shards/*; do
+            cp -r "$dir"/* AllIndiaAdvance/advance/data/ || true
           done
 
       # 🐍 Setup Python
@@ -138,14 +114,14 @@ jobs:
       # 📦 Install dependencies
       - name: Install dependencies
         run: |
-          cd repo
+          cd AllIndiaAdvance
           python -m pip install --upgrade pip
           pip install pytz numpy rapidfuzz
 
       # 🔀 Run combine script
       - name: Run merger
         run: |
-          cd repo
+          cd AllIndiaAdvance
 
           for i in {1..5}; do
             echo "Attempt $i"
@@ -162,7 +138,8 @@ jobs:
       # 💾 Commit merged data
       - name: Commit merged data
         run: |
-          cd repo
+          cd AllIndiaAdvance
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
@@ -170,8 +147,7 @@ jobs:
 
           git commit -m "Merged BMS data ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes"
 
-          sleep $((RANDOM % 10))
-
+          # Safe push with retry
           for i in {1..5}; do
             echo "Push attempt $i"
 
