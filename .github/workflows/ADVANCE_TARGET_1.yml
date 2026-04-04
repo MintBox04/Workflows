@@ -1,0 +1,139 @@
+name: TARGET DATE 1
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '10 * * * *'
+
+env:
+  DATE_CODE: 20260408
+
+# 🔥 prevent overlapping runs
+concurrency:
+  group: target-date-1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  run-shard:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1,2,3,4,5,6,7,8,9,10]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright cloudscraper aiohttp pytz
+          python -m playwright install --with-deps chromium
+
+      - name: Run Shard ${{ matrix.shard }}
+        run: |
+          echo "Running for DATE_CODE=$DATE_CODE"
+
+          for i in {1..5}; do
+            echo "Attempt $i"
+
+            if [ "${{ matrix.shard }}" == "10" ]; then
+              python district_scraper.py $DATE_CODE && break
+            else
+              xvfb-run python run_bms.py ${{ matrix.shard }} $DATE_CODE && break
+            fi
+
+            echo "❌ Failed. Retrying..."
+            sleep 10
+          done
+
+      # 📦 Upload shard output (NO GIT PUSH HERE)
+      - name: Upload shard data
+        uses: actions/upload-artifact@v4
+        with:
+          name: shard-${{ matrix.shard }}
+          path: advance/data/
+
+
+  merge-and-commit:
+    needs: run-shard
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 📥 Download all shard artifacts
+      - name: Download all shards
+        uses: actions/download-artifact@v4
+        with:
+          path: shards
+
+      # 🗂 Merge all shard outputs
+      - name: Merge shard folders
+        run: |
+          mkdir -p advance/data/
+
+          for dir in shards/*; do
+            cp -r "$dir"/* advance/data/ || true
+          done
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Merge Dependencies
+        run: |
+          pip install pytz
+
+      - name: Combine Shards
+        run: |
+          echo "Combining for DATE_CODE=$DATE_CODE"
+
+          for i in {1..5}; do
+            echo "Attempt $i"
+
+            if python combine_shards.py $DATE_CODE; then
+              echo "✅ Combine success"
+              break
+            fi
+
+            echo "❌ Combine failed. Retrying..."
+            sleep 10
+          done
+
+      - name: Commit Combined Data
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+
+          git add advance/data/
+
+          git commit -m "Merged data for $DATE_CODE ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes"
+
+          # Safe push with retry
+          for i in {1..5}; do
+            echo "Push attempt $i"
+
+            git pull --rebase origin main || true
+
+            if git push; then
+              echo "✅ Push succeeded"
+              break
+            fi
+
+            echo "❌ Push failed. Retrying..."
+            sleep 5
+          done
