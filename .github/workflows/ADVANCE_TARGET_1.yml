@@ -87,7 +87,7 @@ jobs:
 
           git add advance/data/
 
-          git commit -m "Shard ${{ matrix.shard }} ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes for shard ${{ matrix.shard }}"
+          git commit -m "[skip ci] Shard ${{ matrix.shard }} ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes for shard ${{ matrix.shard }}"
 
           for i in {1..10}; do
             echo "Push attempt $i for shard ${{ matrix.shard }}"
@@ -182,7 +182,7 @@ jobs:
 
           git commit -m "Merged BMS ADV data ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes"
 
-          for i in {1..5}; do
+          for i in {1..10}; do
             echo "Push attempt $i"
 
             git pull --rebase origin main || true
