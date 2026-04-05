@@ -7,6 +7,7 @@ on:
 
 concurrency:
   group: bmsd-${{ github.ref }}
+  cancel-in-progress: false
 
 # 🌍 GLOBAL ENV
 env:
@@ -47,15 +48,12 @@ jobs:
       # 📦 Install deps
       - name: Install dependencies
         run: |
-          cd AllIndiaDaily
           pip install playwright cloudscraper aiohttp pytz
           python -m playwright install --with-deps chromium
 
       # 🚀 Run scraper
       - name: Run scraper
         run: |
-          cd AllIndiaDaily
-
           echo "Running shard $SHARD_ID"
 
           for i in {1..5}; do
@@ -74,8 +72,6 @@ jobs:
       # 📂 Prepare shard output
       - name: Prepare shard output
         run: |
-          cd AllIndiaDaily
-
           mkdir -p shard_output/$SHARD_ID
           cp -r $DATA_DIR/* shard_output/$SHARD_ID/ 2>/dev/null || echo "No data"
 
@@ -87,7 +83,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: shard-${{ matrix.shard }}
-          path: AllIndiaDaily/shard_output/${{ matrix.shard }}/
+          path: shard_output/${{ matrix.shard }}/
 
 
 # =====================================================
@@ -115,17 +111,17 @@ jobs:
       # 🔀 Merge shard data
       - name: Merge shard data
         run: |
-          mkdir -p AllIndiaDaily/daily/data/
+          mkdir -p daily/data/
 
           echo "Merging shards..."
 
           for dir in shards/*; do
             echo "Processing $dir"
-            cp -r "$dir"/* AllIndiaDaily/daily/data/ 2>/dev/null || true
+            cp -r "$dir"/* daily/data/ 2>/dev/null || true
           done
 
           echo "Final merged data:"
-          ls -R AllIndiaDaily/daily/data/ || echo "Empty"
+          ls -R daily/data/ || echo "Empty"
 
       # 🐍 Python
       - name: Set up Python
@@ -136,14 +132,11 @@ jobs:
       # 📦 Install deps
       - name: Install dependencies
         run: |
-          cd AllIndiaDaily
           pip install numpy rapidfuzz pytz
 
       # 🧠 Combine logic
       - name: Run combine script
         run: |
-          cd AllIndiaDaily
-
           for i in {1..5}; do
             echo "Combine attempt $i"
 
@@ -159,8 +152,6 @@ jobs:
       # 💾 Commit & push
       - name: Commit & Push
         run: |
-          cd AllIndiaDaily
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
