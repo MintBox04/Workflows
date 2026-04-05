@@ -7,10 +7,11 @@ on:
 
 concurrency:
   group: bmsd-${{ github.ref }}
-  cancel-in-progress: false
 
+# 🌍 GLOBAL ENV
 env:
   REPO: MintBox04/AllIndiaDaily
+  DATA_DIR: daily/data
 
 jobs:
 
@@ -25,63 +26,64 @@ jobs:
       matrix:
         shard: [1,2,3,4,5,6,7,8,9,10]
 
-    steps:
-      # Clone repo
-      - name: Clone Repo
-        run: |
-          git clone --depth=1 https://github.com/${{ env.REPO }}.git
+    env:
+      SHARD_ID: ${{ matrix.shard }}
 
-      # Setup Python
+    steps:
+      # ✅ Checkout PRIVATE repo
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          token: ${{ secrets.GH_PAT }}
+          fetch-depth: 1
+
+      # 🐍 Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # Install dependencies
+      # 📦 Install deps
       - name: Install dependencies
         run: |
           cd AllIndiaDaily
-          python -m pip install --upgrade pip
           pip install playwright cloudscraper aiohttp pytz
           python -m playwright install --with-deps chromium
 
-      # Run scraper
+      # 🚀 Run scraper
       - name: Run scraper
         run: |
           cd AllIndiaDaily
 
-          echo "🚀 Running shard ${{ matrix.shard }}"
+          echo "Running shard $SHARD_ID"
 
           for i in {1..5}; do
             echo "Attempt $i"
 
-            if [ "${{ matrix.shard }}" == "10" ]; then
+            if [ "$SHARD_ID" == "10" ]; then
               python district_scraper.py && break
             else
-              xvfb-run python run_bms.py ${{ matrix.shard }} && break
+              xvfb-run python run_bms.py $SHARD_ID && break
             fi
 
-            echo "Retrying..."
+            echo "Retry..."
             sleep 10
           done
 
-      # Prepare shard-specific output
+      # 📂 Prepare shard output
       - name: Prepare shard output
         run: |
           cd AllIndiaDaily
 
-          echo "📦 Preparing shard folder"
+          mkdir -p shard_output/$SHARD_ID
+          cp -r $DATA_DIR/* shard_output/$SHARD_ID/ 2>/dev/null || echo "No data"
 
-          mkdir -p shard_output/${{ matrix.shard }}
+          echo "Shard $SHARD_ID data:"
+          ls -R shard_output/$SHARD_ID || echo "Empty"
 
-          # Copy safely (avoid overwrite)
-          cp -r daily/data/* shard_output/${{ matrix.shard }}/ 2>/dev/null || echo "No data"
-
-          echo "📂 Shard content:"
-          ls -R shard_output/${{ matrix.shard }} || echo "Empty shard"
-
-      # Upload artifact
-      - name: Upload shard artifact
+      # 📤 Upload artifact
+      - name: Upload shard
         uses: actions/upload-artifact@v4
         with:
           name: shard-${{ matrix.shard }}
@@ -96,46 +98,49 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Clone repo with push access
-      - name: Clone Repo
-        run: |
-          git clone https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git
+      # ✅ Checkout PRIVATE repo with push access
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          token: ${{ secrets.GH_PAT }}
+          fetch-depth: 1
 
-      # Download all shard artifacts
+      # 📥 Download all shards
       - name: Download shards
         uses: actions/download-artifact@v4
         with:
           path: shards
 
-      # Merge all shard data
+      # 🔀 Merge shard data
       - name: Merge shard data
         run: |
           mkdir -p AllIndiaDaily/daily/data/
 
-          echo "📥 Merging shards..."
+          echo "Merging shards..."
 
           for dir in shards/*; do
             echo "Processing $dir"
             cp -r "$dir"/* AllIndiaDaily/daily/data/ 2>/dev/null || true
           done
 
-          echo "📂 Final merged content:"
-          ls -R AllIndiaDaily/daily/data/ || echo "No merged data"
+          echo "Final merged data:"
+          ls -R AllIndiaDaily/daily/data/ || echo "Empty"
 
-      # Setup Python
+      # 🐍 Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # Install combine dependencies
+      # 📦 Install deps
       - name: Install dependencies
         run: |
           cd AllIndiaDaily
           pip install numpy rapidfuzz pytz
 
-      # Run combine script
-      - name: Combine shards
+      # 🧠 Combine logic
+      - name: Run combine script
         run: |
           cd AllIndiaDaily
 
@@ -143,15 +148,15 @@ jobs:
             echo "Combine attempt $i"
 
             if python combine_shards.py; then
-              echo "✅ Combine success"
+              echo "Combine success"
               break
             fi
 
-            echo "Retrying combine..."
+            echo "Retry combine..."
             sleep 10
           done
 
-      # Commit and push
+      # 💾 Commit & push
       - name: Commit & Push
         run: |
           cd AllIndiaDaily
@@ -168,11 +173,11 @@ jobs:
 
             git pull --rebase origin main || true
 
-            if git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git; then
-              echo "✅ Push success"
+            if git push; then
+              echo "Push success"
               break
             fi
 
-            echo "❌ Push failed. Retrying..."
+            echo "Push failed, retrying..."
             sleep 5
           done
