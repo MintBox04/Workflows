@@ -1,128 +1,126 @@
-name: ALL india Daily
+name: Daily ALL INDIA
 
 on:
-  schedule:
-    - cron: "0 * * * *"
   workflow_dispatch:
+  schedule:
+    - cron: "*/40 * * * *"
 
-# 🔥 prevent overlapping runs
+permissions:
+  contents: write
+
 concurrency:
-  group: bmsd-${{ github.ref }}
-  cancel-in-progress: true
+  group: bms-daily-${{ github.ref }}
 
 jobs:
-  scrape:
+# =====================================================
+# 1️⃣ SHARDS
+# =====================================================
+  shards:
+    name: Shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     strategy:
       fail-fast: false
       matrix:
         shard: [1,2,3,4,5,6,7,8,9,10]
 
-    env:
-      REPO: MintBox04/AllIndiaDaily
-
     steps:
-      # 🔒 Clone repo
-      - name: Clone Repo
-        run: |
-          git clone --depth=1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git
+      # ⚡ FAST CHECKOUT
+      - name: 🧾 Checkout repo (fast)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          clean: false
 
-      # 🐍 Setup Python
-      - name: Set up Python
+      # 🐍 Python 3.11
+      - name: 🐍 Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
 
       # ⚡ Cache pip
       - name: Cache pip
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip
+          key: ${{ runner.os }}-pip-3.11
 
-      # 📦 Install dependencies
+      # 📦 Install deps
       - name: Install dependencies
         run: |
-          cd AllIndiaDaily
           python -m pip install --upgrade pip
           pip install playwright cloudscraper aiohttp pytz
           python -m playwright install --with-deps chromium
 
-      # 🎬 Run scraper
+      # 🎬 Run shard scraper
       - name: Run scraper
         run: |
-          cd AllIndiaDaily
-
           echo "🚀 Running shard ${{ matrix.shard }}"
 
           for i in {1..5}; do
             echo "Attempt $i"
 
-            if [ "${{ matrix.shard }}" == "10" ]; then
-              python district_scraper.py && break
-            else
-              xvfb-run python run_bms.py ${{ matrix.shard }} && break
-            fi
+            xvfb-run python run_bms.py ${{ matrix.shard }} && break
 
             echo "❌ Failed. Retrying..."
             sleep 10
           done
 
-      # 📦 Upload shard data as artifact (NO GIT PUSH HERE)
+      # 📦 Upload shard data
       - name: Upload shard data
         uses: actions/upload-artifact@v4
         with:
           name: shard-${{ matrix.shard }}
-          path: AllIndiaDaily/daily/data/
+          path: daily/data/
 
 
+# =====================================================
+# 2️⃣ MERGE
+# =====================================================
   merge:
-    needs: scrape
+    name: Merge & Push
+    needs: shards
     runs-on: ubuntu-latest
 
-    env:
-      REPO: MintBox04/AllIndiaDaily
-
     steps:
-      # 🔒 Clone repo
-      - name: Clone Repo
-        run: |
-          git clone --depth=1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git
+      # ⚡ FAST CHECKOUT
+      - name: 🧾 Checkout repo (fast)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-      # 📥 Download all shard artifacts
-      - name: Download all shards
+      # 📥 Download all shards
+      - name: Download shards
         uses: actions/download-artifact@v4
         with:
           path: shards
 
-      # 🗂 Move all shard data into repo
+      # 🗂 Merge shard data
       - name: Merge shard folders
         run: |
-          mkdir -p AllIndiaDaily/daily/data/
+          mkdir -p daily/data/
 
           for dir in shards/*; do
-            cp -r "$dir"/* AllIndiaDaily/daily/data/ || true
+            cp -r "$dir"/* daily/data/ || true
           done
 
-      # 🐍 Setup Python
-      - name: Set up Python
+      # 🐍 Python 3.11
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
 
-      # 📦 Install dependencies
+      # 📦 Install deps
       - name: Install dependencies
         run: |
-          cd AllIndiaDaily
           python -m pip install --upgrade pip
           pip install pytz numpy rapidfuzz
 
-      # 🔀 Run combine script
+      # 🔀 Combine shards
       - name: Run merger
         run: |
-          cd AllIndiaDaily
-
           for i in {1..5}; do
             echo "Attempt $i"
 
@@ -135,25 +133,21 @@ jobs:
             sleep 10
           done
 
-      # 💾 Commit merged data
-      - name: Commit merged data
+      # 💾 Commit & Push
+      - name: Commit and push
         run: |
-          cd AllIndiaDaily
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add daily/data/
+          git commit -m "BMS update ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes"
 
-          git commit -m "Merged BMS data ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes"
-
-          # Safe push with retry
           for i in {1..5}; do
             echo "Push attempt $i"
 
             git pull --rebase origin main || true
 
-            if git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git; then
+            if git push; then
               echo "✅ Push succeeded"
               break
             fi
