@@ -7,10 +7,15 @@ on:
 
 # 🔥 prevent overlapping runs
 concurrency:
-  group: bms-${{ github.ref }}
-  cancel-in-progress: true
+  group: bms-advance-${{ github.ref }}
+
+env:
+  REPO: MintBox04/AllIndiaAdvance
 
 jobs:
+# =====================================================
+# 1️⃣ SCRAPE
+# =====================================================
   scrape:
     runs-on: ubuntu-latest
 
@@ -19,27 +24,24 @@ jobs:
       matrix:
         shard: [1,2,3,4,5,6,7,8,9,10]
 
-    env:
-      REPO: MintBox04/AllIndiaAdvance
-
     steps:
-      # 🔒 Clone repo
-      - name: Clone Repo
+      # ⚡ FAST CLONE
+      - name: Clone Repo (fast)
         run: |
-          git clone --depth=1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git
+          git clone --depth=1 --single-branch https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git
 
-      # 🐍 Setup Python
+      # 🐍 Python 3.11
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
 
       # ⚡ Cache pip
       - name: Cache pip
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip
+          key: ${{ runner.os }}-pip-3.11
 
       # 📦 Install dependencies
       - name: Install dependencies
@@ -69,7 +71,7 @@ jobs:
             sleep 10
           done
 
-      # 📦 Upload shard data as artifact (NO GIT PUSH HERE)
+      # 📦 Upload shard data
       - name: Upload shard data
         uses: actions/upload-artifact@v4
         with:
@@ -77,26 +79,26 @@ jobs:
           path: AllIndiaAdvance/advance/data/
 
 
+# =====================================================
+# 2️⃣ MERGE
+# =====================================================
   merge:
     needs: scrape
     runs-on: ubuntu-latest
 
-    env:
-      REPO: MintBox04/AllIndiaAdvance
-
     steps:
-      # 🔒 Clone repo
-      - name: Clone Repo
+      # ⚡ FAST CLONE
+      - name: Clone Repo (fast)
         run: |
-          git clone --depth=1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git
+          git clone --depth=1 --single-branch https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git
 
-      # 📥 Download all shard artifacts
+      # 📥 Download shards
       - name: Download all shards
         uses: actions/download-artifact@v4
         with:
           path: shards
 
-      # 🗂 Move all shard data into repo
+      # 🗂 Merge shard data
       - name: Merge shard folders
         run: |
           mkdir -p AllIndiaAdvance/advance/data/
@@ -105,11 +107,11 @@ jobs:
             cp -r "$dir"/* AllIndiaAdvance/advance/data/ || true
           done
 
-      # 🐍 Setup Python
+      # 🐍 Python 3.11
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
 
       # 📦 Install dependencies
       - name: Install dependencies
@@ -118,7 +120,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install pytz numpy rapidfuzz
 
-      # 🔀 Run combine script
+      # 🔀 Combine shards
       - name: Run merger
         run: |
           cd AllIndiaAdvance
@@ -135,7 +137,7 @@ jobs:
             sleep 10
           done
 
-      # 💾 Commit merged data
+      # 💾 Commit & push
       - name: Commit merged data
         run: |
           cd AllIndiaAdvance
@@ -144,10 +146,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add advance/data/
+          git commit -m "Merged ADV data ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes"
 
-          git commit -m "Merged BMS data ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes"
-
-          # Safe push with retry
           for i in {1..5}; do
             echo "Push attempt $i"
 
