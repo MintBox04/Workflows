@@ -1,20 +1,22 @@
-name: ALL INDIA ADVANCE 
+name: ALL INDIA ADVANCE
 
 on:
   schedule:
-    - cron: "30 * * * *"
+    - cron: "45 * * * *"
   workflow_dispatch:
 
-# 🔥 prevent overlapping runs
 concurrency:
   group: bms-advance-${{ github.ref }}
 
+# 🌍 GLOBAL ENV
 env:
   REPO: MintBox04/AllIndiaAdvance
+  DATA_DIR: advance/data
 
 jobs:
+
 # =====================================================
-# 1️⃣ SCRAPE
+# 1️⃣ SCRAPE (PARALLEL SHARDS)
 # =====================================================
   scrape:
     runs-on: ubuntu-latest
@@ -24,140 +26,172 @@ jobs:
       matrix:
         shard: [1,2,3,4,5,6,7,8,9,10]
 
-    steps:
-      # ⚡ FAST CLONE
-      - name: Clone Repo (fast)
-        run: |
-          git clone --depth=1 --single-branch https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git
+    env:
+      SHARD_ID: ${{ matrix.shard }}
 
-      # 🐍 Python 3.11
+    steps:
+      # ✅ Checkout PRIVATE repo
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          token: ${{ secrets.GH_PAT }}
+          fetch-depth: 1
+
+      # 🐍 Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # ⚡ Cache pip
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-3.11
-
-      # 📦 Install dependencies
+      # 📦 Install deps
       - name: Install dependencies
         run: |
-          cd AllIndiaAdvance
-          python -m pip install --upgrade pip
           pip install playwright cloudscraper aiohttp pytz
           python -m playwright install --with-deps chromium
 
-      # 🎬 Run scraper
+      # 🚀 Run scraper
       - name: Run scraper
         run: |
-          cd AllIndiaAdvance
-
-          echo "🚀 Running shard ${{ matrix.shard }}"
+          echo "Running shard $SHARD_ID"
 
           for i in {1..5}; do
             echo "Attempt $i"
 
-            if [ "${{ matrix.shard }}" == "10" ]; then
+            if [ "$SHARD_ID" == "10" ]; then
               python district_scraper.py && break
             else
-              xvfb-run python run_bms.py ${{ matrix.shard }} && break
+              xvfb-run python run_bms.py $SHARD_ID && break
             fi
 
-            echo "❌ Failed. Retrying..."
+            echo "Retry..."
             sleep 10
           done
 
-      # 📦 Upload shard data
-      - name: Upload shard data
-        uses: actions/upload-artifact@v4
-        with:
-          name: shard-${{ matrix.shard }}
-          path: AllIndiaAdvance/advance/data/
+      # 📂 Prepare shard output
+      - name: Prepare shard output
+        run: |
+          mkdir -p shard_output/$SHARD_ID
+          cp -r $DATA_DIR/* shard_output/$SHARD_ID/ 2>/dev/null || echo "No data"
+
+          echo "Shard $SHARD_ID data:"
+          ls -R shard_output/$SHARD_ID || echo "Empty"
+
+      # 📤 Push shard individually
+      - name: Push shard to repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          mkdir -p $DATA_DIR
+          cp -r shard_output/$SHARD_ID/* $DATA_DIR/ 2>/dev/null || echo "No data to push"
+
+          git add $DATA_DIR/
+
+          git commit -m "Shard $SHARD_ID ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes for shard $SHARD_ID"
+
+          for i in {1..10}; do
+            echo "Push attempt $i for shard $SHARD_ID"
+            
+            git pull --rebase origin main || true
+            
+            if git push; then
+              echo "Push success for shard $SHARD_ID"
+              break
+            fi
+            
+            echo "Push failed, retrying..."
+            sleep 5
+          done
 
 
 # =====================================================
-# 2️⃣ MERGE
+# 2️⃣ COMBINE + PUSH
 # =====================================================
-  merge:
+  combine:
     needs: scrape
     runs-on: ubuntu-latest
 
     steps:
-      # ⚡ FAST CLONE
-      - name: Clone Repo (fast)
-        run: |
-          git clone --depth=1 --single-branch https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git
-
-      # 📥 Download shards
-      - name: Download all shards
-        uses: actions/download-artifact@v4
+      # ✅ Checkout PRIVATE repo with push access
+      - name: Checkout repo
+        uses: actions/checkout@v4
         with:
-          path: shards
+          repository: ${{ env.REPO }}
+          token: ${{ secrets.GH_PAT }}
+          fetch-depth: 1
 
-      # 🗂 Merge shard data
-      - name: Merge shard folders
+      # 📥 Pull all pushed shard data
+      - name: Pull latest data
         run: |
-          mkdir -p AllIndiaAdvance/advance/data/
-
-          for dir in shards/*; do
-            cp -r "$dir"/* AllIndiaAdvance/advance/data/ || true
+          echo "Waiting for shards to be available..."
+          sleep 10
+          
+          for i in {1..5}; do
+            echo "Pull attempt $i"
+            
+            git fetch origin main
+            git reset --hard origin/main
+            
+            if [ -d "$DATA_DIR" ] && [ "$(ls -A $DATA_DIR)" ]; then
+              echo "Data pulled successfully"
+              ls -R $DATA_DIR
+              break
+            fi
+            
+            echo "Data not ready, retrying..."
+            sleep 10
           done
+          
+          echo "Current data structure:"
+          ls -R $DATA_DIR || echo "No data available"
 
-      # 🐍 Python 3.11
+      # 🐍 Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # 📦 Install dependencies
+      # 📦 Install deps
       - name: Install dependencies
         run: |
-          cd AllIndiaAdvance
-          python -m pip install --upgrade pip
-          pip install pytz numpy rapidfuzz
+          pip install numpy rapidfuzz pytz
 
-      # 🔀 Combine shards
-      - name: Run merger
+      # 🧠 Combine logic
+      - name: Run combine script
         run: |
-          cd AllIndiaAdvance
-
           for i in {1..5}; do
-            echo "Attempt $i"
+            echo "Combine attempt $i"
 
             if python combine_shards.py; then
-              echo "✅ Combine finished"
+              echo "Combine success"
               break
             fi
 
-            echo "❌ Combine failed. Retrying..."
+            echo "Retry combine..."
             sleep 10
           done
 
-      # 💾 Commit & push
-      - name: Commit merged data
+      # 💾 Commit combined output
+      - name: Commit & Push combined
         run: |
-          cd AllIndiaAdvance
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add advance/data/
-          git commit -m "Merged ADV data ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes"
 
-          for i in {1..5}; do
+          git commit -m "Combined ADV data ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No new changes"
+
+          for i in {1..3}; do
             echo "Push attempt $i"
 
             git pull --rebase origin main || true
 
-            if git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git; then
-              echo "✅ Push succeeded"
+            if git push; then
+              echo "Push success"
               break
             fi
 
-            echo "❌ Push failed. Retrying..."
+            echo "Push failed, retrying..."
             sleep 5
           done
