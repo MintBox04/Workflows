@@ -2,11 +2,12 @@ name: ALL INDIA ADVANCE
 
 on:
   schedule:
-    - cron: "45 * * * *"
+    - cron: "30 * * * *"
   workflow_dispatch:
 
 concurrency:
   group: bms-advance-${{ github.ref }}
+  cancel-in-progress: false
 
 # 🌍 GLOBAL ENV
 env:
@@ -88,7 +89,7 @@ jobs:
 
           git add $DATA_DIR/
 
-          git commit -m "Shard $SHARD_ID ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes for shard $SHARD_ID"
+          git commit -m "[skip ci] Shard $SHARD_ID ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes for shard $SHARD_ID"
 
           for i in {1..10}; do
             echo "Push attempt $i for shard $SHARD_ID"
