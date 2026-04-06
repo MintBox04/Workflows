@@ -2,7 +2,7 @@ name: ALL INDIA ADVANCE
 
 on:
   schedule:
-    - cron: "30 * * * *"
+    - cron: "35 * * * *"
   workflow_dispatch:
 
 concurrency:
