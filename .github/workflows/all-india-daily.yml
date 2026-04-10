@@ -1,18 +1,18 @@
-name: ALL INDIA ADVANCE
+name: ALL india Daily
 
 on:
   schedule:
-    - cron: "35 * * * *"
+    - cron: "10,43 * * * *"
   workflow_dispatch:
 
 concurrency:
-  group: bms-advance-${{ github.ref }}
+  group: bmsd-${{ github.ref }}
   cancel-in-progress: false
 
 # 🌍 GLOBAL ENV
 env:
-  REPO: MintBox04/AllIndiaAdvance
-  DATA_DIR: advance/data
+  REPO: MintBox04/AllIndiaDaily
+  DATA_DIR: daily/data
 
 jobs:
 
@@ -74,9 +74,6 @@ jobs:
         run: |
           mkdir -p shard_output/$SHARD_ID
           cp -r $DATA_DIR/* shard_output/$SHARD_ID/ 2>/dev/null || echo "No data"
-
-          echo "Shard $SHARD_ID data:"
-          ls -R shard_output/$SHARD_ID || echo "Empty"
 
       # 📤 Push shard individually
       - name: Push shard to repo
@@ -143,9 +140,6 @@ jobs:
             echo "Data not ready, retrying..."
             sleep 10
           done
-          
-          echo "Current data structure:"
-          ls -R $DATA_DIR || echo "No data available"
 
       # 🐍 Python
       - name: Set up Python
@@ -179,9 +173,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add advance/data/
+          git add daily/data/
 
-          git commit -m "Combined ADV data ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No new changes"
+          git commit -m "Combined data ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No new changes"
 
           for i in {1..3}; do
             echo "Push attempt $i"
