@@ -7,7 +7,6 @@ on:
 
 concurrency:
   group: fetchvenues-${{ github.ref }}
-  cancel-in-progress: false
 
 env:
   DATA_DIRS: "bmsoutput output"
@@ -66,10 +65,10 @@ jobs:
 
             if [ "$SHARD_ID" == "1" ]; then
               echo "Running BMS scraper"
-              PYTHONUNBUFFERED=1 timeout 180 python bmsvenues.py $SHARD_ID
+              python bmsvenues.py $SHARD_ID
             else
               echo "Running District scraper"
-              PYTHONUNBUFFERED=1 timeout 120 python disvenues.py
+              python disvenues.py
             fi
 
             STATUS=$?
