@@ -10,14 +10,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  DATA_DIR_BMS: bmsoutput
-  DATA_DIR_DIS: output
+  DATA_DIRS: "bmsoutput output"
 
 jobs:
-
-# =====================================================
-# 1️⃣ SCRAPE (PARALLEL SHARDS)
-# =====================================================
   scrape:
     runs-on: ubuntu-latest
 
@@ -30,7 +25,7 @@ jobs:
       SHARD_ID: ${{ matrix.shard }}
 
     steps:
-      # ✅ Checkout repo
+      # ✅ Checkout
       - name: Checkout repo
         uses: actions/checkout@v4
 
@@ -45,13 +40,20 @@ jobs:
         run: |
           pip install cloudscraper aiohttp pytz
 
-      # 🚀 Run scraper (ONE PER SHARD)
+      # 🔍 Debug
+      - name: Debug structure
+        run: |
+          pwd
+          ls -R
+
+      # 🚀 Run scraper
       - name: Run scraper
         run: |
+          cd $GITHUB_WORKSPACE
+
           echo "Running shard $SHARD_ID"
 
-          mkdir -p $DATA_DIR_BMS
-          mkdir -p $DATA_DIR_DIS
+          mkdir -p bmsoutput output
 
           for i in {1..5}; do
             echo "Attempt $i"
@@ -65,44 +67,38 @@ jobs:
             echo "Completed"
             break
 
-            echo "Retry..."
             sleep 10
           done
 
       # 📂 Prepare shard output
       - name: Prepare shard output
         run: |
+          cd $GITHUB_WORKSPACE
+
           mkdir -p shard_output/$SHARD_ID
 
-          if [ "$SHARD_ID" == "1" ]; then
-            cp -r $DATA_DIR_BMS shard_output/$SHARD_ID/ 2>/dev/null || echo "No BMS data"
-          else
-            cp -r $DATA_DIR_DIS shard_output/$SHARD_ID/ 2>/dev/null || echo "No DIS data"
-          fi
+          for dir in $DATA_DIRS; do
+            cp -r $dir shard_output/$SHARD_ID/ 2>/dev/null || echo "No data in $dir"
+          done
 
           echo "Shard $SHARD_ID contents:"
           ls -R shard_output/$SHARD_ID || echo "Empty"
 
-      # 📤 Push shard output
+      # 📤 Push shard
       - name: Push shard
         run: |
+          cd $GITHUB_WORKSPACE
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Copy only relevant data
           cp -r shard_output/$SHARD_ID/* ./ 2>/dev/null || true
 
-          if [ "$SHARD_ID" == "1" ]; then
-            git add .
-          else
-            git add .
-          fi
+          git add bmsoutput/ output/
 
           git commit -m "[skip ci] Shard $SHARD_ID ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes"
 
           for i in {1..5}; do
-            echo "Push attempt $i"
-
             git pull --rebase origin main || true
 
             if git push; then
@@ -110,6 +106,5 @@ jobs:
               break
             fi
 
-            echo "Retrying..."
             sleep 5
           done
