@@ -91,7 +91,7 @@ jobs:
 
           git commit -m "[skip ci] Shard $SHARD_ID ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes for shard $SHARD_ID"
 
-          for i in {1..10}; do
+          for i in {1..20}; do
             echo "Push attempt $i for shard $SHARD_ID"
             
             git pull --rebase origin main || true
@@ -128,7 +128,7 @@ jobs:
           echo "Waiting for shards to be available..."
           sleep 10
           
-          for i in {1..5}; do
+          for i in {1..10}; do
             echo "Pull attempt $i"
             
             git fetch origin main
