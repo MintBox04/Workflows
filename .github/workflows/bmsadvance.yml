@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1,2,3,4,5,6,7,8,9,10]
+        shard: [1,2,3,4,5,6,7,8,9,10,11,12]
 
     env:
       SHARD_ID: ${{ matrix.shard }}
@@ -59,7 +59,7 @@ jobs:
           for i in {1..5}; do
             echo "Attempt $i"
 
-            if [ "$SHARD_ID" == "10" ]; then
+            if [ "$SHARD_ID" == "12" ]; then
               python district_scraper.py && break
             else
               xvfb-run python run_bms.py $SHARD_ID && break
