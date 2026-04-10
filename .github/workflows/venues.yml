@@ -25,7 +25,7 @@ jobs:
       SHARD_ID: ${{ matrix.shard }}
 
     steps:
-      # ✅ Checkout
+      # ✅ FIXED CHECKOUT
       - name: Checkout repo
         uses: actions/checkout@v4
 
@@ -40,17 +40,15 @@ jobs:
         run: |
           pip install cloudscraper aiohttp pytz
 
-      # 🔍 Debug
-      - name: Debug structure
+      # 🔍 DEBUG (keep this once)
+      - name: Debug files
         run: |
           pwd
           ls -R
 
-      # 🚀 Run scraper
+      # 🚀 RUN SCRAPER
       - name: Run scraper
         run: |
-          cd $GITHUB_WORKSPACE
-
           echo "Running shard $SHARD_ID"
 
           mkdir -p bmsoutput output
@@ -70,25 +68,20 @@ jobs:
             sleep 10
           done
 
-      # 📂 Prepare shard output
+      # 📂 Prepare output
       - name: Prepare shard output
         run: |
-          cd $GITHUB_WORKSPACE
-
           mkdir -p shard_output/$SHARD_ID
 
           for dir in $DATA_DIRS; do
             cp -r $dir shard_output/$SHARD_ID/ 2>/dev/null || echo "No data in $dir"
           done
 
-          echo "Shard $SHARD_ID contents:"
           ls -R shard_output/$SHARD_ID || echo "Empty"
 
-      # 📤 Push shard
+      # 📤 Push
       - name: Push shard
         run: |
-          cd $GITHUB_WORKSPACE
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
@@ -96,7 +89,7 @@ jobs:
 
           git add bmsoutput/ output/
 
-          git commit -m "[skip ci] Shard $SHARD_ID ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes"
+          git commit -m "[skip ci] Shard $SHARD_ID $(date -u)" || echo "No changes"
 
           for i in {1..5}; do
             git pull --rebase origin main || true
