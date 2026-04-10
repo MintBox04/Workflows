@@ -9,6 +9,10 @@ concurrency:
   group: bms-${{ github.ref }}
 
 jobs:
+
+# =====================================================
+# 1️⃣ SCRAPE
+# =====================================================
   scrape:
     runs-on: ubuntu-latest
 
@@ -22,7 +26,6 @@ jobs:
       DATE_CODE: "20260410"
 
     steps:
-      # ✅ Checkout repo
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
@@ -30,29 +33,25 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           fetch-depth: 1
 
-      # 🐍 Setup Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      # ⚡ Cache pip
       - name: Cache pip
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-3.12
 
-      # 📦 Install dependencies
       - name: Install dependencies
         run: |
           pip install playwright cloudscraper aiohttp pytz
           python -m playwright install --with-deps chromium
 
-      # 🎬 Run scraper
       - name: Run scraper
         run: |
-          echo "Running shard ${{ matrix.shard }} with DATE_CODE: ${{ env.DATE_CODE }}"
+          echo "Running shard ${{ matrix.shard }}"
 
           for i in {1..5}; do
             echo "Attempt $i"
@@ -63,56 +62,50 @@ jobs:
               xvfb-run python run_bms.py ${{ matrix.shard }} ${{ env.DATE_CODE }} && break
             fi
 
-            echo "Retry..."
             sleep 10
           done
 
-      # 📂 Prepare shard output
       - name: Prepare shard output
         run: |
           mkdir -p shard_output/${{ matrix.shard }}
           cp -r advance/data/* shard_output/${{ matrix.shard }}/ 2>/dev/null || echo "No data"
 
-      # 📤 Push shard individually
-      - name: Push shard to repo
+      # ✅ FIXED SHARD PUSH
+      - name: Push shard
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          mkdir -p advance/data
-          cp -r shard_output/${{ matrix.shard }}/* advance/data/ 2>/dev/null || echo "No data to push"
-
-          git add advance/data/
-
-          git commit -m "[skip ci] Shard ${{ matrix.shard }} ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes for shard ${{ matrix.shard }}"
-
           for i in {1..20}; do
             echo "Push attempt $i for shard ${{ matrix.shard }}"
-            
-            # Abort any existing rebase/merge state
+
             git rebase --abort 2>/dev/null || true
             git merge --abort 2>/dev/null || true
-            
-            # Fetch and reset to remote
-            git fetch origin main || true
-            git reset --hard origin/main || true
-            
-            # Re-add our shard data and commit
+
+            # ✅ SYNC FIRST
+            git fetch origin main
+            git reset --hard origin/main
+
             mkdir -p advance/data
-            cp -r shard_output/${{ matrix.shard }}/* advance/data/ 2>/dev/null || echo "No data to push"
+            cp -r shard_output/${{ matrix.shard }}/* advance/data/ 2>/dev/null || echo "No data"
+
+
             git add advance/data/
-            git commit -m "[skip ci] Shard ${{ matrix.shard }} ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" --allow-empty || true
-            
+
+            git commit -m "[skip ci] Shard ${{ matrix.shard }} ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes"
+
             if git push; then
-              echo "Push success for shard ${{ matrix.shard }}"
+              echo "Push success"
               break
             fi
-            
-            echo "Push failed, retrying..."
+
             sleep 5
           done
 
 
+# =====================================================
+# 2️⃣ MERGE
+# =====================================================
   merge:
     needs: scrape
     runs-on: ubuntu-latest
@@ -122,7 +115,6 @@ jobs:
       DATE_CODE: "20260410"
 
     steps:
-      # ✅ Checkout repo
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
@@ -130,81 +122,69 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           fetch-depth: 1
 
-      # 📥 Pull all pushed shard data
       - name: Pull latest data
         run: |
-          echo "Waiting for shards to be available..."
-          sleep 10
-          
+          echo "Waiting for shards..."
+          sleep 15
+
           for i in {1..20}; do
             echo "Pull attempt $i"
-            
+
             git fetch origin main
             git reset --hard origin/main
-            
 
-            echo "Data not ready, retrying..."
+
+
             sleep 10
           done
-          
-  
 
-      # 🐍 Setup Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      # 📦 Install dependencies
       - name: Install dependencies
         run: |
           pip install pytz numpy rapidfuzz
 
-      # 🔀 Run combine script
       - name: Run merger
         run: |
           for i in {1..5}; do
-            echo "Combine attempt $i with DATE_CODE: ${{ env.DATE_CODE }}"
+            echo "Combine attempt $i"
 
             if python combine_shards.py ${{ env.DATE_CODE }}; then
               echo "Combine success"
               break
             fi
 
-            echo "Combine failed, retrying..."
             sleep 10
           done
 
-      # 💾 Commit & Push
+
+      # ✅ FIXED PUSH
       - name: Commit & Push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add advance/data/
-
-          git commit -m "Merged BMS ADV data ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes"
-
           for i in {1..20}; do
             echo "Push attempt $i"
-            
-            # Abort any existing rebase/merge state
+
             git rebase --abort 2>/dev/null || true
             git merge --abort 2>/dev/null || true
-            
-            # Fetch and reset to remote
-            git fetch origin main || true
-            git reset --hard origin/main || true
-            
-            # Re-add combined data and commit
+
+            # ✅ CRITICAL FIX
+            git fetch origin main
+            git reset --hard origin/main
+
             git add advance/data/
-            git commit -m "Merged BMS ADV data ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" --allow-empty || true
+
+            git commit -m "Merged BMS ADV data ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes"
 
             if git push; then
               echo "Push success"
               break
             fi
 
-            echo "Push failed, retrying..."
             sleep 5
           done
