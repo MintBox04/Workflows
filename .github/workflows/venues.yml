@@ -58,7 +58,7 @@ jobs:
           for i in {1..5}; do
             echo "Attempt $i"
 
-            if [ "$SHARD_ID" == "2" ]; then
+            if [ "$SHARD_ID" == "1" ]; then
               python bmsvenues.py && break
             else
               python disvenues.py && break
