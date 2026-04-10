@@ -125,9 +125,9 @@ jobs:
       - name: Pull latest data
         run: |
           echo "Waiting for shards..."
-          sleep 15
 
-          for i in {1..20}; do
+
+          for i in {1..5}; do
             echo "Pull attempt $i"
 
             git fetch origin main
@@ -135,7 +135,7 @@ jobs:
 
 
 
-            sleep 10
+            sleep 5
           done
 
       - name: Set up Python
@@ -157,7 +157,7 @@ jobs:
               break
             fi
 
-            sleep 10
+            sleep 5
           done
 
 
