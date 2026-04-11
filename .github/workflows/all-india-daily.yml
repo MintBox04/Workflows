@@ -9,6 +9,7 @@ concurrency:
   group: bmsd-${{ github.ref }}
   cancel-in-progress: false
 
+# 🌍 GLOBAL ENV
 env:
   REPO: MintBox04/AllIndiaDaily
   DATA_DIR: daily/data
@@ -30,6 +31,7 @@ jobs:
       SHARD_ID: ${{ matrix.shard }}
 
     steps:
+      # ✅ Checkout PRIVATE repo
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
@@ -37,16 +39,19 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           fetch-depth: 1
 
+      # 🐍 Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      # 📦 Install deps
       - name: Install dependencies
         run: |
           pip install playwright cloudscraper aiohttp pytz
           python -m playwright install --with-deps chromium
 
+      # 🚀 Run scraper
       - name: Run scraper
         run: |
           echo "Running shard $SHARD_ID"
@@ -64,42 +69,38 @@ jobs:
             sleep 10
           done
 
+      # 📂 Prepare shard output
       - name: Prepare shard output
         run: |
           mkdir -p shard_output/$SHARD_ID
           cp -r $DATA_DIR/* shard_output/$SHARD_ID/ 2>/dev/null || echo "No data"
 
-      # ✅ FIXED PUSH LOGIC
+          echo "Shard $SHARD_ID data:"
+          ls -R shard_output/$SHARD_ID || echo "Empty"
+
+      # 📤 Push shard individually
       - name: Push shard to repo
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          mkdir -p $DATA_DIR
+          cp -r shard_output/$SHARD_ID/* $DATA_DIR/ 2>/dev/null || echo "No data to push"
+
+          git add $DATA_DIR/
+
+          git commit -m "[skip ci] Shard $SHARD_ID ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes for shard $SHARD_ID"
+
           for i in {1..20}; do
             echo "Push attempt $i for shard $SHARD_ID"
-
-            git rebase --abort 2>/dev/null || true
-            git merge --abort 2>/dev/null || true
-
-            # ✅ ALWAYS SYNC FIRST
-            git fetch origin main
-            git reset --hard origin/main
-
-            # ✅ COPY DATA AFTER RESET
-            mkdir -p $DATA_DIR
-            cp -r shard_output/$SHARD_ID/* $DATA_DIR/ 2>/dev/null || echo "No data to push"
-
-            echo "FILES TO PUSH:"
-
-            git add $DATA_DIR/
-
-            git commit -m "[skip ci] Shard $SHARD_ID ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes"
-
+            
+            git pull --rebase origin main || true
+            
             if git push; then
               echo "Push success for shard $SHARD_ID"
               break
             fi
-
+            
             echo "Push failed, retrying..."
             sleep 5
           done
@@ -113,6 +114,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # ✅ Checkout PRIVATE repo with push access
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
@@ -120,29 +122,43 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           fetch-depth: 1
 
-      - name: Pull latest shard data
+      # 📥 Pull all pushed shard data
+      - name: Pull latest data
         run: |
-          echo "Waiting for shards..."
+          echo "Waiting for shards to be available..."
+          sleep 10
+          
           for i in {1..5}; do
             echo "Pull attempt $i"
-
+            
             git fetch origin main
             git reset --hard origin/main
-
-        
+            
+            if [ -d "$DATA_DIR" ] && [ "$(ls -A $DATA_DIR)" ]; then
+              echo "Data pulled successfully"
+              ls -R $DATA_DIR
+              break
+            fi
+            
             echo "Data not ready, retrying..."
             sleep 5
           done
+          
+          echo "Current data structure:"
+          ls -R $DATA_DIR || echo "No data available"
 
+      # 🐍 Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      # 📦 Install deps
       - name: Install dependencies
         run: |
           pip install numpy rapidfuzz pytz
 
+      # 🧠 Combine logic
       - name: Run combine script
         run: |
           for i in {1..5}; do
@@ -154,29 +170,23 @@ jobs:
             fi
 
             echo "Retry combine..."
-            sleep 10
+            sleep 5
           done
 
-      # ✅ FIXED COMBINE PUSH
+      # 💾 Commit combined output
       - name: Commit & Push combined
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          git add daily/data/
+
+          git commit -m "Combined data ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No new changes"
+
           for i in {1..5}; do
             echo "Push attempt $i"
 
-            git rebase --abort 2>/dev/null || true
-            git merge --abort 2>/dev/null || true
-
-            # ✅ SYNC FIRST (CRITICAL FIX)
-            git fetch origin main
-            git reset --hard origin/main
-
-            # ✅ ADD AFTER RESET
-            git add daily/data/
-
-            git commit -m "Combined data ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes"
+            git pull --rebase origin main || true
 
             if git push; then
               echo "Push success"
