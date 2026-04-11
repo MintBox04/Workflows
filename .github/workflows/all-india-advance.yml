@@ -7,7 +7,6 @@ on:
 
 concurrency:
   group: bms-advance-${{ github.ref }}
-  cancel-in-progress: false
 
 # 🌍 GLOBAL ENV
 env:
@@ -120,7 +119,7 @@ jobs:
       - name: Pull all shard data
         run: |
           echo "Waiting for all 12 shards to be pushed..."
-          for i in {1..5}; do
+          for i in {1..20}; do
             echo "Sync attempt $i"
             git fetch origin main
             git reset --hard origin/main
@@ -130,7 +129,7 @@ jobs:
               break
             fi
             echo "Waiting ($READY_SHARDS/12 ready)..."
-            sleep 5
+            sleep 30
           done
 
       # 🐍 Python
