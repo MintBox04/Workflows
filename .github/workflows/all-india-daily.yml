@@ -2,7 +2,7 @@ name: ALL india Daily
 
 on:
   schedule:
-    - cron: "10,43 * * * *"
+    - cron: "17 * * * *"
   workflow_dispatch:
 
 concurrency:
