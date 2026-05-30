@@ -1,0 +1,197 @@
+name: TARGET DATE 2
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: bms-advance1-${{ github.ref }}
+
+# 🌍 GLOBAL ENV
+env:
+  REPO: MintBox04/AllIndiaAdvance
+  DATA_DIR: advance/data
+  DATE_CODE: "20260603"
+
+jobs:
+
+# =====================================================
+# 1️⃣ SCRAPE (PARALLEL SHARDS)
+# =====================================================
+  scrape:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1,2,3,4,5,6,7,8,9,10,11,12]
+
+    env:
+      SHARD_ID: ${{ matrix.shard }}
+
+    steps:
+      # ✅ Checkout PRIVATE repo
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          token: ${{ secrets.GH_PAT }}
+          fetch-depth: 1
+
+      # 🐍 Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # 📦 Install deps
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}
+        
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright cloudscraper aiohttp pytz
+          python -m playwright install chromium
+          
+      # 🚀 Run scraper
+      - name: Run scraper
+        run: |
+          echo "Running shard $SHARD_ID"
+
+          for i in {1..5}; do
+            echo "Attempt $i"
+
+            if [ "$SHARD_ID" == "12" ]; then
+              python district_scraper.py $DATE_CODE && break
+            else
+              xvfb-run python run_bms.py $SHARD_ID $DATE_CODE && break
+            fi
+
+            echo "Retry..."
+            sleep 10
+          done
+
+      # 📂 Prepare shard output
+      - name: Prepare shard output
+        run: |
+          mkdir -p shard_output/$SHARD_ID
+          cp -r $DATA_DIR/* shard_output/$SHARD_ID/ 2>/dev/null || echo "No data"
+
+      # 📤 Push shard individually
+      - name: Push shard to repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          mkdir -p $DATA_DIR
+          cp -r shard_output/$SHARD_ID/* $DATA_DIR/ 2>/dev/null || echo "No data to push"
+
+          git add $DATA_DIR/
+
+          git commit -m "[skip ci] Shard $SHARD_ID ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes for shard $SHARD_ID"
+
+          for i in {1..20}; do
+            echo "Push attempt $i for shard $SHARD_ID"
+            git fetch origin main || true
+            git rebase origin/main || { git rebase --abort; git pull --rebase origin main; }
+            if git push; then
+              echo "Push success for shard $SHARD_ID"
+              break
+            fi
+            sleep 5
+          done
+
+
+# =====================================================
+# 2️⃣ COMBINE + PUSH
+# =====================================================
+  combine:
+    needs: scrape
+    runs-on: ubuntu-latest
+
+    steps:
+      # ✅ Checkout PRIVATE repo with push access
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          token: ${{ secrets.GH_PAT }}
+          fetch-depth: 1
+
+      # 📥 Pull all pushed shard data
+      - name: Pull latest data
+        run: |
+          echo "Waiting for shards to be available..."
+          sleep 10
+          
+          for i in {1..5}; do
+            echo "Pull attempt $i"
+            
+            git fetch origin main
+            git reset --hard origin/main
+            
+            if [ -d "$DATA_DIR" ] && [ "$(ls -A $DATA_DIR)" ]; then
+              echo "Data pulled successfully"
+              ls -R $DATA_DIR
+              break
+            fi
+            
+            echo "Data not ready, retrying..."
+            sleep 5
+          done
+          
+          echo "Current data structure:"
+          ls -R $DATA_DIR || echo "No data available"
+
+      # 🐍 Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # 📦 Install deps
+      - name: Install dependencies
+        run: |
+          pip install numpy rapidfuzz pytz
+
+      # 🧠 Combine logic
+      - name: Run combine script
+        run: |
+          for i in {1..5}; do
+            echo "Combine attempt $i"
+
+            if python combine_shards.py $DATE_CODE; then
+              echo "Combine success"
+              break
+            fi
+
+            echo "Retry combine..."
+            sleep 5
+          done
+
+      # 💾 Commit combined output
+      - name: Commit & Push combined
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add advance/data/
+
+          git commit -m "Combined data ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No new changes"
+
+          for i in {1..5}; do
+            echo "Push attempt $i"
+
+            git pull --rebase origin main || true
+
+            if git push; then
+              echo "Push success"
+              break
+            fi
+
+            echo "Push failed, retrying..."
+            sleep 5
+          done
