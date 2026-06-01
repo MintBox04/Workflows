@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: bms-advance1-${{ github.ref }}
+  group: bms-advance2-${{ github.ref }}
 
 # 🌍 GLOBAL ENV
 env:
