@@ -40,23 +40,8 @@ jobs:
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
           else
-            pip install requests playwright
+            pip install requests cloudscraper
           fi
-
-      # 💾 Cache Playwright browsers
-      - name: Cache Playwright Browsers
-        id: playwright-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('srilanka/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-playwright-
-
-      # 📥 Install Playwright Chromium
-      - name: Install Playwright Chromium
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: python -m playwright install chromium
 
       # 🎬 Run scraper
       - name: Run scraper
@@ -69,7 +54,7 @@ jobs:
           for i in {1..6}; do
             echo "Attempt $i"
 
-            if xvfb-run python bms.py --mode "$MODE"; then
+            if python bms.py --mode "$MODE"; then
               echo "✅ Scraper finished successfully"
               break
             fi
