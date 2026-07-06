@@ -10,7 +10,7 @@ concurrency:
 env:
   REPO: MintBox04/AllIndiaAdvance
   DATA_DIR: advance/data
-  DATE_CODE: "20260610"
+  DATE_CODE: "20260710"
 
 jobs:
 
