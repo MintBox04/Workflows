@@ -32,16 +32,15 @@ jobs:
         with:
           python-version: "3.12"
 
-      # 📦 Install dependencies
+      # 📦 Install dependencies (Force install playwright)
       - name: Install dependencies
         run: |
           cd srilanka
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
-          else
-            pip install requests cloudscraper playwright
           fi
+          pip install playwright
 
       # 💾 Cache Playwright browsers
       - name: Cache Playwright Browsers
@@ -60,16 +59,18 @@ jobs:
 
       # 🎬 Run scraper
       - name: Run scraper
+        env:
+          PROXY_URL: ${{ secrets.PROXY_URL }}
         run: |
           cd srilanka
           MODE="${{ matrix.mode }}"
 
-          echo "🎬 Running bms.py with mode $MODE"
+          echo "🎬 Running Master Sri Lanka Scraper (srilanka.py) with mode $MODE"
 
           for i in {1..6}; do
             echo "Attempt $i"
 
-            if python bms.py --mode "$MODE"; then
+            if python srilanka.py --mode "$MODE"; then
               echo "✅ Scraper finished successfully"
               break
             fi
@@ -85,7 +86,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add data/
+          git add data/ srilanka_load_status.png || true
 
           git commit -m "${{ matrix.mode }} update ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes"
 
