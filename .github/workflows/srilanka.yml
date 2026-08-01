@@ -18,7 +18,7 @@ jobs:
         mode: [daily, advance]
 
     env:
-      REPO: MintBox04/srilanka
+      REPO: cinenationbo/srilanka
 
     steps:
       # 🔒 Clone PRIVATE repo
@@ -53,11 +53,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-playwright-
 
-      # 📥 Install Playwright Chromium with dependencies
+      # 📥 Install Playwright Chromium
       - name: Install Playwright Chromium
-        run: |
-          cd srilanka
-          python -m playwright install chromium --with-deps
+        run: python -m playwright install chromium
 
       # 🎬 Run scraper
       - name: Run scraper
