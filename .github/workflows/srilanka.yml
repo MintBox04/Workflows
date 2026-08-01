@@ -85,6 +85,9 @@ jobs:
       - name: Commit scraper data
         run: |
           cd srilanka
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           # 🧹 Clean up pycache and png files
           find . -name "*.pyc" -delete || true
           find . -name "__pycache__" -type d -exec rm -rf {} + || true
@@ -92,7 +95,7 @@ jobs:
 
           git add data/ venues.json || true
 
-          git commit -m " ${{ matrix.mode }} update ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes"
+          git commit -m "[skip ci] ${{ matrix.mode }} update ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes"
 
           sleep $((RANDOM % 10))
 
