@@ -51,7 +51,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install playwright cloudscraper aiohttp pytz curl_cffi
+          pip install playwright cloudscraper aiohttp pytz curl_cffi aiohttp_retry
           python -m playwright install chromium
       # 🚀 Run scraper
       - name: Run scraper
