@@ -57,7 +57,6 @@ jobs:
       - name: Install Playwright Chromium
         run: |
           cd srilanka
-          python -m playwright install chromium --with-deps
 
       # 🎬 Run scraper
       - name: Run scraper
