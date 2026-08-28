@@ -42,7 +42,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
 
       # 3. Install Dependencies
       - name: Install dependencies
@@ -134,7 +133,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
 
       # 3. Install Dependencies
       - name: Install dependencies
