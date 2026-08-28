@@ -1,0 +1,220 @@
+name: ALL INDIA ADVANCE (3-Repo Architecture)
+
+on:
+  schedule:
+    - cron: "35 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: all-india-advance-${{ github.ref }}
+  cancel-in-progress: false
+
+# 🌍 GLOBAL ENV - 3 REPOSITORIES CONFIGURATION
+env:
+  CODE_REPO: MintBox04/IndiaCodes
+  SHARDS_REPO: MintBox04/AllindiaAdvance-Shards
+  DATA_REPO: MintBox04/AllindiaAdvance-data
+
+jobs:
+
+# =====================================================
+# 1️⃣ SCRAPE (12 PARALLEL SHARDS -> AllindiaAdvance-Shards)
+# =====================================================
+  scrape:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+
+    env:
+      SHARD_ID: ${{ matrix.shard }}
+
+    steps:
+      # 1. Clone Code Repository (IndiaCodes)
+      - name: Clone Code Repository
+        run: |
+          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.CODE_REPO }}.git code_repo
+
+      # 2. Setup Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      # 3. Install Dependencies
+      - name: Install dependencies
+        run: |
+          pip install playwright cloudscraper aiohttp pytz aiohttp-retry
+          python -m playwright install --with-deps chromium
+
+      # 4. Compute Date Code (Tomorrow IST)
+      - name: Compute Date Code
+        run: |
+          DATE_CODE=$(python -c "from datetime import datetime, timedelta, timezone; print((datetime.now(timezone(timedelta(hours=5, minutes=30))) + timedelta(days=1)).strftime('%Y%m%d'))")
+          echo "DATE_CODE=$DATE_CODE" >> $GITHUB_ENV
+          echo "🚀 Running Shard $SHARD_ID for Date: $DATE_CODE"
+
+      # 5. Fast Sparse Clone Shards Repo (< 2 seconds)
+      - name: Fast Clone Shards Repository
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.SHARDS_REPO }}.git shards_repo
+          cd shards_repo
+          git sparse-checkout set data/${{ env.DATE_CODE }}/shards
+
+      # 6. Run Scraper Shard (bms_advance.py / district_advance.py)
+      - name: Run Scraper Shard
+        run: |
+          export DATA_DIR="$(pwd)/shards_repo/data"
+          cd code_repo
+
+          for i in {1..5}; do
+            echo "Attempt $i for Shard $SHARD_ID..."
+
+            if [ "$SHARD_ID" == "12" ]; then
+              if [ -f "district_advance.py" ]; then
+                python district_advance.py "$DATE_CODE" && break
+              elif [ -f "indiaAdvance/district_advance.py" ]; then
+                python indiaAdvance/district_advance.py "$DATE_CODE" && break
+              elif [ -f "district_scrapper.py" ]; then
+                python district_scrapper.py "$DATE_CODE" && break
+              fi
+            else
+              if [ -f "bms_advance.py" ]; then
+                python bms_advance.py "$SHARD_ID" "$DATE_CODE" && break
+              elif [ -f "indiaAdvance/bms_advance.py" ]; then
+                python indiaAdvance/bms_advance.py "$SHARD_ID" "$DATE_CODE" && break
+              elif [ -f "bms_scrapper.py" ]; then
+                python bms_scrapper.py "$SHARD_ID" "$DATE_CODE" && break
+              fi
+            fi
+
+            echo "⚠️ Retry in 10s..."
+            sleep 10
+          done
+
+      # 7. Push Shard to AllindiaAdvance-Shards (With Auto-Rebase Retry)
+      - name: Push Shard to Shards Repo
+        run: |
+          cd shards_repo
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add data/
+          git commit -m "[skip ci] Shard $SHARD_ID ($DATE_CODE - $(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes to commit"
+
+          for i in {1..20}; do
+            echo "Push attempt $i/20 for Shard $SHARD_ID..."
+            git pull --rebase --autostash origin main || true
+            if git push origin main; then
+              echo "✅ Shard $SHARD_ID successfully pushed to ${{ env.SHARDS_REPO }}"
+              break
+            fi
+            sleep $((RANDOM % 5 + 3))
+          done
+
+
+# =====================================================
+# 2️⃣ COMBINE & LOGS (Outputs -> AllindiaAdvance-data)
+# =====================================================
+  combine:
+    needs: scrape
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Clone Code Repository (IndiaCodes)
+      - name: Clone Code Repository
+        run: |
+          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.CODE_REPO }}.git code_repo
+
+      # 2. Setup Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      # 3. Install Dependencies
+      - name: Install dependencies
+        run: |
+          pip install numpy pytz
+
+      # 4. Compute Date Code (Tomorrow IST)
+      - name: Compute Date Code
+        run: |
+          DATE_CODE=$(python -c "from datetime import datetime, timedelta, timezone; print((datetime.now(timezone(timedelta(hours=5, minutes=30))) + timedelta(days=1)).strftime('%Y%m%d'))")
+          echo "DATE_CODE=$DATE_CODE" >> $GITHUB_ENV
+          echo "🎯 Target Date Code: $DATE_CODE"
+
+      # 5. Fast Sparse Clone Shards & Data Repositories (< 3 seconds total)
+      - name: Fast Clone Repositories
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.SHARDS_REPO }}.git shards_repo
+          cd shards_repo
+          git sparse-checkout set data/${{ env.DATE_CODE }}
+          cd ..
+
+          git clone --depth 1 --filter=blob:none --sparse https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.DATA_REPO }}.git data_repo
+          cd data_repo
+          git sparse-checkout set data/${{ env.DATE_CODE }} data/logs
+
+      # 6. Wait for All 12 Shards
+      - name: Wait for All Shards
+        run: |
+          cd shards_repo
+          for i in {1..25}; do
+            echo "Checking shards sync attempt $i/25..."
+            git pull --rebase origin main || true
+            READY_SHARDS=$(find data/${DATE_CODE} -type f \( -name "detailed*.csv.gz" -o -name "detailed*.json.gz" -o -name "detailed*.json" \) 2>/dev/null | wc -l)
+            echo "📊 Found $READY_SHARDS / 12 shards ready."
+            if [ "$READY_SHARDS" -ge 12 ]; then
+              echo "✅ All 12 shards available!"
+              break
+            fi
+            sleep 20
+          done
+
+      # 7. Execute Combiner Script
+      - name: Combine Shards & Generate Growth Logs
+        run: |
+          export DATA_DIR="$(pwd)/data_repo/data"
+          export SHARDS_DIR="$(pwd)/shards_repo/data/${DATE_CODE}/shards"
+          export FINAL_DIR="$(pwd)/data_repo/data/${DATE_CODE}"
+          export LOGS_DIR="$(pwd)/data_repo/data/${DATE_CODE}/logs"
+
+          mkdir -p "$FINAL_DIR"
+          mkdir -p "$LOGS_DIR"
+
+          cd code_repo
+          for i in {1..3}; do
+            echo "Combine attempt $i..."
+            if [ -f "combine_shards.py" ]; then
+              python combine_shards.py "$DATE_CODE" && break
+            elif [ -f "indiaAdvance/combine_shards.py" ]; then
+              python indiaAdvance/combine_shards.py "$DATE_CODE" && break
+            fi
+            echo "Retry combine in 5s..."
+            sleep 5
+          done
+
+      # 8. Commit & Push Final Data & Logs to AllindiaAdvance-data
+      - name: Push Final Data & Logs to Data Repo
+        run: |
+          cd data_repo
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add data/
+          git commit -m "Update Final Data & Growth Logs ($DATE_CODE - $(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes to commit"
+
+          for i in {1..10}; do
+            echo "Push attempt $i to ${{ env.DATA_REPO }}..."
+            git pull --rebase --autostash origin main || true
+            if git push origin main; then
+              echo "✅ Final data & logs successfully pushed to ${{ env.DATA_REPO }}"
+              break
+            fi
+            sleep 5
+          done
