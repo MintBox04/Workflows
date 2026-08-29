@@ -1,0 +1,90 @@
+name: Deploy All India Advance Data
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "data/**"
+
+  workflow_dispatch:
+
+concurrency:
+  group: allindiaadvance-cloudflare
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # =====================================================
+      # 1. Checkout ENTIRE DATA REPOSITORY
+      # =====================================================
+      - name: Checkout Full Data Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # =====================================================
+      # 2. Show Repository Information
+      # =====================================================
+      - name: Show Data Statistics
+        run: |
+          echo "======================================"
+          echo "All India Advance - Cloudflare Deploy"
+          echo "======================================"
+
+          echo ""
+          echo "Repository size:"
+          du -sh .
+
+          echo ""
+          echo "Data directory size:"
+          du -sh data
+
+          echo ""
+          echo "Total data files:"
+          find data -type f | wc -l
+
+          echo ""
+          echo "Latest directories:"
+          find data -mindepth 1 -maxdepth 1 -type d | sort | tail -10
+
+      # =====================================================
+      # 3. Install Wrangler
+      # =====================================================
+      - name: Install Wrangler
+        run: |
+          npm install -g wrangler
+
+      # =====================================================
+      # 4. Ensure Pages Project Exists
+      # =====================================================
+      - name: Ensure Cloudflare Pages Project
+        run: |
+          wrangler pages project create allindiaadvancev2 \
+            --production-branch=main || true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # =====================================================
+      # 5. DEPLOY ENTIRE DATA DIRECTORY
+      # =====================================================
+      - name: Deploy Entire Data Repository
+        run: |
+          echo "Starting full Cloudflare Pages deployment..."
+
+          wrangler pages deploy data \
+            --project-name=allindiaadvancev2 \
+            --branch=main \
+            --commit-dirty=true
+
+          echo ""
+          echo "======================================"
+          echo "Deployment completed successfully"
+          echo "======================================"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
