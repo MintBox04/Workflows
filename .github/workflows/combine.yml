@@ -93,9 +93,7 @@ jobs:
           git sparse-checkout set data/$DATE_CODE
           cd ..
 
-          git clone --depth 1 --filter=blob:none --sparse https://x-access-token:${{ secrets.GH_PAT }}@github.com/$DATA_REPO.git data_repo
-          cd data_repo
-          git sparse-checkout set --no-cone "data/$DATE_CODE/**" "data/global_summary.json.gz"
+          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/$DATA_REPO.git data_repo
 
       # 6. Execute Combiner Script
       - name: Combine Shards & Generate Trend
