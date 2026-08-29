@@ -1,6 +1,8 @@
 name: ALL INDIA ADVANCE (3-Repo Architecture)
 
 on:
+  schedule:
+    - cron: "35 * * * *"
   workflow_dispatch:
 
 concurrency:
@@ -24,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 
     env:
       SHARD_ID: ${{ matrix.shard }}
@@ -54,7 +56,7 @@ jobs:
       # 4. Install Dependencies
       - name: Install dependencies
         run: |
-          pip install playwright cloudscraper aiohttp pytz aiohttp-retry curl_cffi 
+          pip install playwright cloudscraper aiohttp pytz aiohttp-retry
           if [ "${{ steps.playwright-cache.outputs.cache-hit }}" != "true" ]; then
             python -m playwright install --with-deps chromium
           else
@@ -149,7 +151,7 @@ jobs:
 
           git clone --depth 1 --filter=blob:none --sparse https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.DATA_REPO }}.git data_repo
           cd data_repo
-          git sparse-checkout set data/${{ env.DATE_CODE }} data/logs
+          git sparse-checkout set data/${{ env.DATE_CODE }} data/global_summary.json.gz
 
       # 6. Wait for All 12 Shards
       - name: Wait for All Shards
@@ -168,18 +170,16 @@ jobs:
           done
 
       # 7. Execute Combiner Script
-      - name: Combine Shards & Generate Growth Logs
+      - name: Combine Shards & Generate Trend
         run: |
           export DATA_DIR="$(pwd)/data_repo/data"
           export SHARDS_DIR="$(pwd)/shards_repo/data/${DATE_CODE}/shards"
           export FINAL_DIR="$(pwd)/data_repo/data/${DATE_CODE}"
-          export LOGS_DIR="$(pwd)/data_repo/data/${DATE_CODE}/logs"
 
           mkdir -p "$FINAL_DIR"
-          mkdir -p "$LOGS_DIR"
 
           cd code_repo
-          python combine_shards.py "$DATE_CODE"
+          python combine_shards.py "$DATE_CODE" advance
 
       # 8. Commit & Push Final Data & Logs to AllindiaAdvance-data
       - name: Push Final Data & Logs to Data Repo
@@ -200,3 +200,14 @@ jobs:
             fi
             sleep 5
           done
+
+      # 9. Fast Direct Deploy to Cloudflare Pages (< 4 seconds)
+      - name: Deploy to Cloudflare Pages
+        if: secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != ''
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          projectName: allindiaadvancev2
+          directory: data_repo/data
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
