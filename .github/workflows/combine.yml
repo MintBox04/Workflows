@@ -1,0 +1,144 @@
+name: RUN COMBINE ONLY (Standalone Combiner & Deploy)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Combine Mode (advance or daily)"
+        required: true
+        default: "advance"
+        type: choice
+        options:
+          - advance
+          - daily
+      date_code:
+        description: "Target Date Code (YYYYMMDD) - Leave blank for default (Tomorrow for advance, Today for daily)"
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  group: combine-only-${{ github.ref }}
+  cancel-in-progress: false
+
+# 🌍 GLOBAL ENV
+env:
+  CODE_REPO: MintBox04/IndiaCodes
+
+jobs:
+  combine:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Clone Code Repository (IndiaCodes)
+      - name: Clone Code Repository
+        run: |
+          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.CODE_REPO }}.git code_repo
+
+      # 2. Setup Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # 3. Install Dependencies
+      - name: Install dependencies
+        run: |
+          pip install numpy pytz
+
+      # 4. Compute Date Code, Mode, and Dynamic Target Repositories
+      - name: Compute Target Parameters
+        run: |
+          INPUT_MODE="${{ github.event.inputs.mode }}"
+          INPUT_DATE="${{ github.event.inputs.date_code }}"
+          
+          if [ -z "$INPUT_MODE" ]; then
+            INPUT_MODE="advance"
+          fi
+
+          if [ -n "$INPUT_DATE" ]; then
+            DATE_CODE="$INPUT_DATE"
+          else
+            if [ "$INPUT_MODE" == "daily" ]; then
+              DATE_CODE=$(python -c "from datetime import datetime, timedelta, timezone; print(datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime('%Y%m%d'))")
+            else
+              DATE_CODE=$(python -c "from datetime import datetime, timedelta, timezone; print((datetime.now(timezone(timedelta(hours=5, minutes=30))) + timedelta(days=1)).strftime('%Y%m%d'))")
+            fi
+          fi
+
+          if [ "$INPUT_MODE" == "daily" ]; then
+            SHARDS_REPO="MintBox04/Allindiadaily-shards"
+            DATA_REPO="MintBox04/Allindiadaily-data"
+            CF_PROJECT="dailysalesv2"
+          else
+            SHARDS_REPO="MintBox04/AllindiaAdvance-Shards"
+            DATA_REPO="MintBox04/AllindiaAdvance-data"
+            CF_PROJECT="allindiaadvancev2"
+          fi
+
+          echo "MODE=$INPUT_MODE" >> $GITHUB_ENV
+          echo "DATE_CODE=$DATE_CODE" >> $GITHUB_ENV
+          echo "SHARDS_REPO=$SHARDS_REPO" >> $GITHUB_ENV
+          echo "DATA_REPO=$DATA_REPO" >> $GITHUB_ENV
+          echo "CF_PROJECT=$CF_PROJECT" >> $GITHUB_ENV
+
+          echo "🎯 Mode: $INPUT_MODE | Date: $DATE_CODE"
+          echo "📦 Shards Repo: $SHARDS_REPO | Data Repo: $DATA_REPO | Cloudflare: $CF_PROJECT"
+
+      # 5. Fast Sparse Clone Shards & Data Repositories (< 3 seconds total)
+      - name: Fast Clone Repositories
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse https://x-access-token:${{ secrets.GH_PAT }}@github.com/$SHARDS_REPO.git shards_repo
+          cd shards_repo
+          git sparse-checkout set data/$DATE_CODE
+          cd ..
+
+          git clone --depth 1 --filter=blob:none --sparse https://x-access-token:${{ secrets.GH_PAT }}@github.com/$DATA_REPO.git data_repo
+          cd data_repo
+          git sparse-checkout set --no-cone "data/$DATE_CODE/**" "data/global_summary.json.gz"
+
+      # 6. Execute Combiner Script
+      - name: Combine Shards & Generate Trend
+        run: |
+          export DATA_DIR="$(pwd)/data_repo/data"
+          export SHARDS_DIR="$(pwd)/shards_repo/data/${DATE_CODE}/shards"
+          export FINAL_DIR="$(pwd)/data_repo/data/${DATE_CODE}"
+
+          mkdir -p "$FINAL_DIR"
+
+          cd code_repo
+          python combine_shards.py "$DATE_CODE" "$MODE"
+
+      # 7. Commit & Push Final Data & Logs to Data Repo
+      - name: Push Final Data & Logs to Data Repo
+        run: |
+          cd data_repo
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add data/
+          git commit -m "Manual Combine: Update Final Data & Growth Logs ($MODE - $DATE_CODE - $(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes to commit"
+
+          for i in {1..10}; do
+            echo "Push attempt $i to $DATA_REPO..."
+            git pull --rebase --autostash origin main || true
+            if git push origin main; then
+              echo "✅ Final data & logs successfully pushed to $DATA_REPO"
+              break
+            fi
+            sleep 5
+          done
+
+      # 8. Fast Direct Deploy to Cloudflare Pages (< 4 seconds)
+      - name: Deploy to Cloudflare Pages
+        if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          projectName: ${{ env.CF_PROJECT }}
+          directory: data_repo/data
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
