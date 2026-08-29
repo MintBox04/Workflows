@@ -206,7 +206,6 @@ jobs:
         if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
         continue-on-error: true
         run: |
-          npx wrangler pages project create dailysalesv2 --production-branch=main || true
           npx wrangler pages deploy data_repo/data --project-name=dailysalesv2 --branch=main --commit-dirty=true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
