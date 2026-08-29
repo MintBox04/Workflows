@@ -1,4 +1,4 @@
-name: TARGET DATE 1 (3-Repo Architecture)
+name: TARGET DATE 1
 
 on:
   schedule:
@@ -14,7 +14,7 @@ env:
   CODE_REPO: MintBox04/IndiaCodes
   SHARDS_REPO: MintBox04/AllindiaAdvance-Shards
   DATA_REPO: MintBox04/AllindiaAdvance-data
-  TARGET_DATE_CODE: "20260423"
+  TARGET_DATE_CODE: "20260902"
 
 jobs:
 
