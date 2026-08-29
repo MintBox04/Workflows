@@ -134,6 +134,7 @@ jobs:
         if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
         continue-on-error: true
         run: |
+          npx wrangler pages project create "$CF_PROJECT" --production-branch=main || true
           npx wrangler pages deploy data_repo/data --project-name="$CF_PROJECT" --branch=main --commit-dirty=true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
