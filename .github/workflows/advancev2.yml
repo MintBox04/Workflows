@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
 
     env:
       SHARD_ID: ${{ matrix.shard }}
@@ -204,7 +204,6 @@ jobs:
         if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
         continue-on-error: true
         run: |
-          npx wrangler pages project create allindiaadvancev2 --production-branch=main || true
           npx wrangler pages deploy data_repo/data --project-name=allindiaadvancev2 --branch=main --commit-dirty=true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
