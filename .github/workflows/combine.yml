@@ -132,13 +132,9 @@ jobs:
       # 8. Fast Direct Deploy to Cloudflare Pages (< 4 seconds)
       - name: Deploy to Cloudflare Pages
         if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+        continue-on-error: true
+        run: |
+          npx wrangler pages deploy data_repo/data --project-name="$CF_PROJECT" --branch=main --commit-dirty=true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        uses: cloudflare/pages-action@v1
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          projectName: ${{ env.CF_PROJECT }}
-          directory: data_repo/data
-          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
