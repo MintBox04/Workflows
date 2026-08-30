@@ -1,0 +1,88 @@
+name: Indian Logs Update
+
+on:
+  schedule:
+    # Runs every 30 minutes (at minute 0 and 30)
+    - cron: "0,30 * * * *"
+  workflow_dispatch:
+
+# 🔥 Prevent overlapping runs
+concurrency:
+  group: indian-logs-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  update-logs:
+    runs-on: ubuntu-latest
+
+    env:
+      REPO: MintBox04/IndianLogs
+
+    steps:
+      # 🔒 Clone Private Repo
+      - name: Clone Private Repo
+        run: |
+          git clone --depth=1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git
+
+      # 🐍 Setup Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # 📦 Install dependencies
+      - name: Install dependencies
+        run: |
+          cd IndianLogs
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+          pip install requests pytz
+
+      # 🚀 Run update_today script
+      - name: Run update script
+        run: |
+          cd IndianLogs
+          if [ -f "Logs/update_today.py" ]; then
+            python Logs/update_today.py
+          elif [ -f "update_today.py" ]; then
+            python monthly.py
+          else
+            echo "❌ update_today.py not found!"
+            exit 1
+          fi
+
+      # 💾 Commit & Push
+      - name: Commit and push changes
+        run: |
+          cd IndianLogs
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # 🧹 Clean up pycache
+          find . -name "*.pyc" -delete || true
+          find . -name "__pycache__" -type d -exec rm -rf {} + || true
+
+          git add data/ || true
+
+          if git diff --staged --quiet; then
+            echo "No data changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Update movie data ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))"
+
+          for i in {1..5}; do
+            echo "Push attempt $i"
+
+            git pull --rebase --autostash origin main || true
+
+            if git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git; then
+              echo "✅ Push succeeded"
+              break
+            fi
+
+            echo "❌ Push failed. Retrying in 5 seconds..."
+            sleep 5
+          done
