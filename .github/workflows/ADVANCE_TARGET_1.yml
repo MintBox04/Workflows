@@ -55,7 +55,7 @@ jobs:
       # 4. Install Dependencies
       - name: Install dependencies
         run: |
-          pip install playwright cloudscraper aiohttp pytz aiohttp-retry
+          pip install playwright cloudscraper aiohttp pytz aiohttp-retry curl_cffi
           if [ "${{ steps.playwright-cache.outputs.cache-hit }}" != "true" ]; then
             python -m playwright install --with-deps chromium
           else
