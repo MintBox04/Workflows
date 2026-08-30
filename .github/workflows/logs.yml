@@ -47,7 +47,7 @@ jobs:
           if [ -f "Logs/update_today.py" ]; then
             python Logs/update_today.py
           elif [ -f "update_today.py" ]; then
-            python monthly.py
+            python update_today.py
           else
             echo "❌ update_today.py not found!"
             exit 1
