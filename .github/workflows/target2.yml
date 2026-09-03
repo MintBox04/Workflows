@@ -4,18 +4,20 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: bms-advance2-${{ github.ref }}
+  group: bms-advance1-${{ github.ref }}
+  cancel-in-progress: false
 
-# 🌍 GLOBAL ENV
+# 🌍 GLOBAL ENV - 3 REPOSITORIES CONFIGURATION
 env:
-  REPO: MintBox04/AllIndiaAdvance
-  DATA_DIR: advance/data
-  DATE_CODE: "20260806"
+  CODE_REPO: MintBox04/IndiaCodes
+  SHARDS_REPO: MintBox04/AllindiaAdvance-Shards
+  DATA_REPO: MintBox04/AllindiaAdvance-data
+  DATE_CODE: "20260902"
 
 jobs:
 
 # =====================================================
-# 1️⃣ SCRAPE (PARALLEL SHARDS)
+# 1️⃣ SCRAPE (12 PARALLEL SHARDS -> AllindiaAdvance-Shards)
 # =====================================================
   scrape:
     runs-on: ubuntu-latest
@@ -23,175 +25,171 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1,2,3,4,5,6,7,8,9,10,11,12]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
 
     env:
       SHARD_ID: ${{ matrix.shard }}
 
     steps:
-      # ✅ Checkout PRIVATE repo
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.REPO }}
-          token: ${{ secrets.GH_PAT }}
-          fetch-depth: 1
+      # 1. Clone Code Repository (IndiaCodes)
+      - name: Clone Code Repository
+        run: |
+          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.CODE_REPO }}.git code_repo
 
-      # 🐍 Python
+      # 2. Setup Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # 📦 Install deps
-      - name: Cache Playwright browsers
+      # 3. Cache Playwright Browsers
+      - name: Cache Playwright Browsers
+        id: playwright-cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}
-        
+          key: ${{ runner.os }}-playwright-chromium-v1
+          restore-keys: |
+            ${{ runner.os }}-playwright-chromium-
+
+      # 4. Install Dependencies
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install playwright cloudscraper aiohttp pytz aiohttp_retry
-          python -m playwright install chromium
-          
-      # 🚀 Run scraper
-      - name: Run scraper
+          pip install playwright cloudscraper aiohttp pytz aiohttp-retry
+          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" != "true" ]; then
+            python -m playwright install chromium
+          fi
+
+      # 4. Fast Sparse Clone Shards Repo (< 2 seconds)
+      - name: Fast Clone Shards Repository
         run: |
-          echo "Running shard $SHARD_ID"
+          git clone --depth 1 --filter=blob:none --sparse https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.SHARDS_REPO }}.git shards_repo
+          cd shards_repo
+          git sparse-checkout set data/$DATE_CODE/shards
 
-          for i in {1..5}; do
-            echo "Attempt $i"
-
-            if [ "$SHARD_ID" == "12" ]; then
-              python district_scraper.py $DATE_CODE && break
-            else
-              xvfb-run python run_bms.py $SHARD_ID $DATE_CODE && break
-            fi
-
-            echo "Retry..."
-            sleep 10
-          done
-
-      # 📂 Prepare shard output
-      - name: Prepare shard output
+      # 5. Run Scraper Shard (bms_advance.py / district_advance.py)
+      - name: Run Scraper Shard
         run: |
-          mkdir -p shard_output/$SHARD_ID
-          cp -r $DATA_DIR/* shard_output/$SHARD_ID/ 2>/dev/null || echo "No data"
+          echo "🚀 Running Shard $SHARD_ID for Target Date: $DATE_CODE"
+          export DATA_DIR="$(pwd)/shards_repo/data"
+          cd code_repo
 
-      # 📤 Push shard individually
-      - name: Push shard to repo
+          if [ "$SHARD_ID" == "12" ]; then
+            python district_advance.py "$DATE_CODE"
+          else
+            xvfb-run python bms_advance.py "$SHARD_ID" "$DATE_CODE"
+          fi
+
+      # 6. Push Shard to AllindiaAdvance-Shards (With Auto-Rebase Retry)
+      - name: Push Shard to Shards Repo
         run: |
+          cd shards_repo
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          mkdir -p $DATA_DIR
-          cp -r shard_output/$SHARD_ID/* $DATA_DIR/ 2>/dev/null || echo "No data to push"
-
-          git add $DATA_DIR/
-
-          git commit -m "[skip ci] Shard $SHARD_ID ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes for shard $SHARD_ID"
+          git add data/
+          git commit -m "[skip ci] Target Date Shard $SHARD_ID ($DATE_CODE - $(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes to commit"
 
           for i in {1..20}; do
-            echo "Push attempt $i for shard $SHARD_ID"
-            git fetch origin main || true
-            git rebase origin/main || { git rebase --abort; git pull --rebase origin main; }
-            if git push; then
-              echo "Push success for shard $SHARD_ID"
+            echo "Push attempt $i/20 for Shard $SHARD_ID..."
+            git pull --rebase --autostash origin main || true
+            if git push origin main; then
+              echo "✅ Shard $SHARD_ID successfully pushed to ${{ env.SHARDS_REPO }}"
               break
             fi
-            sleep 5
+            sleep $((RANDOM % 5 + 3))
           done
 
 
 # =====================================================
-# 2️⃣ COMBINE + PUSH
+# 2️⃣ COMBINE & LOGS (Outputs -> AllindiaAdvance-data)
 # =====================================================
   combine:
     needs: scrape
     runs-on: ubuntu-latest
 
     steps:
-      # ✅ Checkout PRIVATE repo with push access
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.REPO }}
-          token: ${{ secrets.GH_PAT }}
-          fetch-depth: 1
-
-      # 📥 Pull all pushed shard data
-      - name: Pull latest data
+      # 1. Clone Code Repository (IndiaCodes)
+      - name: Clone Code Repository
         run: |
-          echo "Waiting for shards to be available..."
-          sleep 10
-          
-          for i in {1..5}; do
-            echo "Pull attempt $i"
-            
-            git fetch origin main
-            git reset --hard origin/main
-            
-            if [ -d "$DATA_DIR" ] && [ "$(ls -A $DATA_DIR)" ]; then
-              echo "Data pulled successfully"
-              ls -R $DATA_DIR
-              break
-            fi
-            
-            echo "Data not ready, retrying..."
-            sleep 5
-          done
-          
-          echo "Current data structure:"
-          ls -R $DATA_DIR || echo "No data available"
+          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.CODE_REPO }}.git code_repo
 
-      # 🐍 Python
+      # 2. Setup Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # 📦 Install deps
+      # 3. Install Dependencies
       - name: Install dependencies
         run: |
-          pip install numpy rapidfuzz pytz
+          pip install numpy pytz
 
-      # 🧠 Combine logic
-      - name: Run combine script
+      # 4. Fast Clone Shards & Data Repositories (< 3 seconds total)
+      - name: Fast Clone Repositories
         run: |
-          for i in {1..5}; do
-            echo "Combine attempt $i"
+          git clone --depth 1 --filter=blob:none --sparse https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.SHARDS_REPO }}.git shards_repo
+          cd shards_repo
+          git sparse-checkout set data/$DATE_CODE
+          cd ..
 
-            if python combine_shards.py $DATE_CODE; then
-              echo "Combine success"
+          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.DATA_REPO }}.git data_repo
+
+      # 5. Wait for All 12 Shards
+      - name: Wait for All Shards
+        run: |
+          cd shards_repo
+          for i in {1..25}; do
+            echo "Checking shards sync attempt $i/25..."
+            git pull --rebase origin main || true
+            READY_SHARDS=$(find data/${DATE_CODE} -type f \( -name "detailed*.csv.gz" -o -name "detailed*.json.gz" -o -name "detailed*.json" \) 2>/dev/null | wc -l)
+            echo "📊 Found $READY_SHARDS / 12 shards ready."
+            if [ "$READY_SHARDS" -ge 12 ]; then
+              echo "✅ All 12 shards available!"
               break
             fi
-
-            echo "Retry combine..."
-            sleep 5
+            sleep 20
           done
 
-      # 💾 Commit combined output
-      - name: Commit & Push combined
+      # 6. Execute Combiner Script
+      - name: Combine Shards & Generate Trend
         run: |
+          export DATA_DIR="$(pwd)/data_repo/data"
+          export SHARDS_DIR="$(pwd)/shards_repo/data/${DATE_CODE}/shards"
+          export FINAL_DIR="$(pwd)/data_repo/data/${DATE_CODE}"
+
+          mkdir -p "$FINAL_DIR"
+
+          cd code_repo
+          python combine_shards.py "$DATE_CODE" advance
+
+      # 7. Commit & Push Final Data & Logs to AllindiaAdvance-data
+      - name: Push Final Data & Logs to Data Repo
+        run: |
+          cd data_repo
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add advance/data/
+          git add data/
+          git commit -m "Update Target Date Data & Growth Logs ($DATE_CODE - $(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes to commit"
 
-          git commit -m "Combined data ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No new changes"
-
-          for i in {1..5}; do
-            echo "Push attempt $i"
-
-            git pull --rebase origin main || true
-
-            if git push; then
-              echo "Push success"
+          for i in {1..10}; do
+            echo "Push attempt $i to ${{ env.DATA_REPO }}..."
+            git pull --rebase --autostash origin main || true
+            if git push origin main; then
+              echo "✅ Final data & logs successfully pushed to ${{ env.DATA_REPO }}"
               break
             fi
-
-            echo "Push failed, retrying..."
             sleep 5
           done
+
+      # 8. Fast Direct Deploy to Cloudflare Pages (< 4 seconds)
+      - name: Deploy to Cloudflare Pages
+        if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+        continue-on-error: true
+        run: |
+          npx wrangler pages project create allindiaadvancev2 --production-branch=main || true
+          npx wrangler pages deploy data_repo/data --project-name=allindiaadvancev2 --branch=main --commit-dirty=true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
