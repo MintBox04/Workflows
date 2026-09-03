@@ -12,7 +12,7 @@ env:
   CODE_REPO: MintBox04/IndiaCodes
   SHARDS_REPO: MintBox04/AllindiaAdvance-Shards
   DATA_REPO: MintBox04/AllindiaAdvance-data
-  DATE_CODE: "20260903"
+  DATE_CODE: "20260902"
 
 jobs:
 
@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
 
     env:
       SHARD_ID: ${{ matrix.shard }}
@@ -55,11 +55,9 @@ jobs:
       # 4. Install Dependencies
       - name: Install dependencies
         run: |
-          pip install playwright cloudscraper aiohttp pytz aiohttp-retry curl_cffi
+          pip install playwright cloudscraper aiohttp pytz aiohttp-retry
           if [ "${{ steps.playwright-cache.outputs.cache-hit }}" != "true" ]; then
-            python -m playwright install --with-deps chromium
-          else
-            python -m playwright install-deps chromium
+            python -m playwright install chromium
           fi
 
       # 4. Fast Sparse Clone Shards Repo (< 2 seconds)
