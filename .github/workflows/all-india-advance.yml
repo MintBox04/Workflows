@@ -1,4 +1,4 @@
-name: ALL INDIA ADVANCE 
+name: ALL INDIA ADVANCE (3-Repo Architecture)
 
 on:
   schedule:
@@ -26,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
 
     env:
       SHARD_ID: ${{ matrix.shard }}
@@ -56,11 +56,9 @@ jobs:
       # 4. Install Dependencies
       - name: Install dependencies
         run: |
-          pip install playwright cloudscraper aiohttp pytz aiohttp-retry curl_cffi
+          pip install playwright cloudscraper aiohttp pytz aiohttp-retry
           if [ "${{ steps.playwright-cache.outputs.cache-hit }}" != "true" ]; then
-            python -m playwright install --with-deps chromium
-          else
-            python -m playwright install-deps chromium
+            python -m playwright install chromium
           fi
 
       # 4. Compute Date Code (Tomorrow IST)
