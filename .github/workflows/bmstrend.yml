@@ -10,7 +10,7 @@ concurrency:
   group: bms-hourly-trend-${{ github.ref }}
   cancel-in-progress: false
 
-# 🌍 GLOBAL ENV - REPOSITORY CONFIGURATION
+# 🌍 GLOBAL ENV - SINGLE REPOSITORY CONFIGURATION (Code & Data in bmsTrend)
 env:
   DATA_REPO: MintBox04/bmsTrend
 
@@ -21,16 +21,7 @@ jobs:
 
     steps:
       # -------------------------------------------------
-      # 1. Checkout Code Repository
-      # -------------------------------------------------
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: main
-
-      # -------------------------------------------------
-      # 2. Setup Python
+      # 1. Setup Python
       # -------------------------------------------------
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -38,7 +29,7 @@ jobs:
           python-version: "3.11"
 
       # -------------------------------------------------
-      # 3. Install Dependencies
+      # 2. Install Dependencies
       # -------------------------------------------------
       - name: Install dependencies
         run: |
@@ -46,47 +37,66 @@ jobs:
           pip install cloudscraper
 
       # -------------------------------------------------
-      # 4. Compute Date Code (IST)
+      # 3. Compute Date Code (IST)
       # -------------------------------------------------
       - name: Compute Date Code
         run: |
           DATE_CODE=$(python -c "from datetime import datetime, timedelta, timezone; print(datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime('%Y%m%d'))")
           echo "DATE_CODE=$DATE_CODE" >> $GITHUB_ENV
-          echo "🚀 Running BMS Trend Tracker for Date Code: $DATE_CODE"
+          echo "🎯 Target Date Code: $DATE_CODE"
 
       # -------------------------------------------------
-      # 5. Fast Clone Data Repository (MintBox04/bmsTrend)
+      # 4. Clone Repository (MintBox04/bmsTrend)
       # -------------------------------------------------
-      - name: Clone Data Repository
+      - name: Clone bmsTrend Repository
         run: |
-          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.DATA_REPO }}.git data_repo || {
-            echo "Creating fallback data_repo directory"
-            mkdir -p data_repo
-            cd data_repo
-            git init
-            git remote add origin https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.DATA_REPO }}.git
-          }
+          git clone https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.DATA_REPO }}.git bms_repo
+          cd bms_repo
+          echo "Files in ${{ env.DATA_REPO }}:"
+          ls -la
 
       # -------------------------------------------------
-      # 6. Run Scraper Pipeline
+      # 5. Run Trend Tracker Inside Repository
       # -------------------------------------------------
-      - name: Run BMS Trend Scraper
+      - name: Run Trend Tracker
         run: |
-          python bmstrend/trend.py --output-dir data_repo/data
+          cd bms_repo
 
-          # Place dashboard at root of data_repo as index.html for instant viewing
-          cp bmstrend/index.html data_repo/index.html 2>/dev/null || true
+          # Locate trend.py inside bms_repo
+          SCRIPT_PATH=""
+          if [ -f "bmstrend/trend.py" ]; then
+            SCRIPT_PATH="bmstrend/trend.py"
+          elif [ -f "trend.py" ]; then
+            SCRIPT_PATH="trend.py"
+          else
+            SCRIPT_PATH=$(find . -name "trend.py" | head -n 1)
+          fi
+
+          if [ -z "$SCRIPT_PATH" ]; then
+            echo "❌ Error: Could not find trend.py in ${{ env.DATA_REPO }}"
+            exit 1
+          fi
+
+          echo "🚀 Executing $SCRIPT_PATH..."
+          python "$SCRIPT_PATH" --output-dir data
+
+          # Ensure dashboard is copied to root index.html
+          if [ -f "data/dashboard.html" ]; then
+            cp data/dashboard.html index.html
+          elif [ -f "bmstrend/index.html" ]; then
+            cp bmstrend/index.html index.html
+          fi
 
       # -------------------------------------------------
-      # 7. Commit & Push Data to MintBox04/bmsTrend (With Auto-Rebase Retry)
+      # 6. Commit & Push Data to MintBox04/bmsTrend (Auto-Rebase Retry)
       # -------------------------------------------------
-      - name: Push Data to Data Repo
+      - name: Push Data to MintBox04/bmsTrend
         run: |
-          cd data_repo
+          cd bms_repo
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add .
+          git add data/ index.html || git add .
           git commit -m "Update BMS Hourly Trends ($DATE_CODE - $(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes to commit"
 
           for i in {1..20}; do
@@ -100,14 +110,15 @@ jobs:
           done
 
       # -------------------------------------------------
-      # 8. Fast Direct Deploy to Cloudflare Pages (Optional)
+      # 7. Fast Direct Deploy to Cloudflare Pages (Optional)
       # -------------------------------------------------
       - name: Deploy to Cloudflare Pages
         if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
         continue-on-error: true
         run: |
+          cd bms_repo
           npx wrangler pages project create bmstrend --production-branch=main || true
-          npx wrangler pages deploy data_repo --project-name=bmstrend --branch=main --commit-dirty=true
+          npx wrangler pages deploy data --project-name=bmstrend --branch=main --commit-dirty=true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
