@@ -1,4 +1,4 @@
-name: ALL INDIA ADVANCE (3-Repo Architecture)
+name: ALL INDIA ADVANCE
 
 on:
   schedule:
@@ -11,7 +11,7 @@ concurrency:
 
 # 🌍 GLOBAL ENV - 3 REPOSITORIES CONFIGURATION
 env:
-  CODE_REPO: MintBox04/IndiaCodes2
+  CODE_REPO: MintBox04/IndiaCodes
   SHARDS_REPO: MintBox04/AllindiaAdvance-Shards
   DATA_REPO: MintBox04/AllindiaAdvance-data
 
