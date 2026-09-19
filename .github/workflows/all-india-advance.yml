@@ -1,6 +1,8 @@
-name: ALL INDIA ADVANCE
+name: ALL INDIA ADVANCE (3-Repo Architecture)
 
 on:
+  schedule:
+    - cron: "35 * * * *"
   workflow_dispatch:
 
 concurrency:
@@ -9,14 +11,14 @@ concurrency:
 
 # 🌍 GLOBAL ENV - 3 REPOSITORIES CONFIGURATION
 env:
-  CODE_REPO: MintBox04/IndiaCodes
+  CODE_REPO: MintBox04/IndiaCodes2
   SHARDS_REPO: MintBox04/AllindiaAdvance-Shards
   DATA_REPO: MintBox04/AllindiaAdvance-data
 
 jobs:
 
 # =====================================================
-# 1️⃣ SCRAPE (12 PARALLEL SHARDS -> AllindiaAdvance-Shards)
+# 1️⃣ SCRAPE (15 PARALLEL SHARDS: 14 BMS + 1 District -> AllindiaAdvance-Shards)
 # =====================================================
   scrape:
     runs-on: ubuntu-latest
@@ -24,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,12]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 
     env:
       SHARD_ID: ${{ matrix.shard }}
@@ -54,7 +56,7 @@ jobs:
       # 4. Install Dependencies
       - name: Install dependencies
         run: |
-          pip install playwright cloudscraper aiohttp pytz aiohttp-retry curl_cffi undetected-chromedriver
+          pip install undetected-chromedriver playwright cloudscraper aiohttp pytz aiohttp-retry
           if [ "${{ steps.playwright-cache.outputs.cache-hit }}" != "true" ]; then
             python -m playwright install chromium
           fi
@@ -73,16 +75,16 @@ jobs:
           cd shards_repo
           git sparse-checkout set data/$DATE_CODE/shards
 
-      # 6. Run Scraper Shard (bms_advance.py / district_advance.py)
+      # 6. Run Scraper Shard (bms_advance_uc.py / district_advance.py)
       - name: Run Scraper Shard
         run: |
           export DATA_DIR="$(pwd)/shards_repo/data"
           cd code_repo
 
-          if [ "$SHARD_ID" == "12" ]; then
+          if [ "$SHARD_ID" == "15" ]; then
             python district_advance.py "$DATE_CODE"
           else
-            xvfb-run --auto-servernum python bms_advance.py "$SHARD_ID" "$DATE_CODE"
+            xvfb-run  python bms_advance_uc.py "$SHARD_ID" "$DATE_CODE"
           fi
 
       # 7. Push Shard to AllindiaAdvance-Shards (With Auto-Rebase Retry)
@@ -147,7 +149,7 @@ jobs:
 
           git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.DATA_REPO }}.git data_repo
 
-      # 6. Wait for All 12 Shards
+      # 6. Wait for All 15 Shards (14 BMS + 1 District)
       - name: Wait for All Shards
         run: |
           cd shards_repo
@@ -155,9 +157,9 @@ jobs:
             echo "Checking shards sync attempt $i/25..."
             git pull --rebase origin main || true
             READY_SHARDS=$(find data/${DATE_CODE} -type f \( -name "detailed*.csv.gz" -o -name "detailed*.json.gz" -o -name "detailed*.json" \) 2>/dev/null | wc -l)
-            echo "📊 Found $READY_SHARDS / 12 shards ready."
-            if [ "$READY_SHARDS" -ge 12 ]; then
-              echo "✅ All 12 shards available!"
+            echo "📊 Found $READY_SHARDS / 15 shards ready."
+            if [ "$READY_SHARDS" -ge 15 ]; then
+              echo "✅ All 15 shards available!"
               break
             fi
             sleep 20
