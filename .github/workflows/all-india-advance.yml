@@ -54,7 +54,7 @@ jobs:
       # 4. Install Dependencies
       - name: Install dependencies
         run: |
-          pip install playwright cloudscraper aiohttp pytz aiohttp-retry curl_cffi 
+          pip install playwright cloudscraper aiohttp pytz aiohttp-retry curl_cffi undetected-chromedriver
           if [ "${{ steps.playwright-cache.outputs.cache-hit }}" != "true" ]; then
             python -m playwright install chromium
           fi
@@ -82,7 +82,7 @@ jobs:
           if [ "$SHARD_ID" == "12" ]; then
             python district_advance.py "$DATE_CODE"
           else
-            xvfb-run python bms_advance.py "$SHARD_ID" "$DATE_CODE"
+            xvfb-run --auto-servernum python bms_advance.py "$SHARD_ID" "$DATE_CODE"
           fi
 
       # 7. Push Shard to AllindiaAdvance-Shards (With Auto-Rebase Retry)
