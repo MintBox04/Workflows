@@ -84,7 +84,7 @@ jobs:
           if [ "$SHARD_ID" == "15" ]; then
             python district_advance.py "$DATE_CODE"
           else
-            xvfb-run  python bms_advance_uc.py "$SHARD_ID" "$DATE_CODE"
+            xvfb-run  python bms_advance.py "$SHARD_ID" "$DATE_CODE"
           fi
 
       # 7. Push Shard to AllindiaAdvance-Shards (With Auto-Rebase Retry)
