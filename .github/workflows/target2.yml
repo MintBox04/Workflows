@@ -12,12 +12,12 @@ env:
   CODE_REPO: MintBox04/IndiaCodes
   SHARDS_REPO: MintBox04/AllindiaAdvance-Shards
   DATA_REPO: MintBox04/AllindiaAdvance-data
-  DATE_CODE: "20260902"
+  DATE_CODE: "20260924"
 
 jobs:
 
 # =====================================================
-# 1️⃣ SCRAPE (12 PARALLEL SHARDS -> AllindiaAdvance-Shards)
+# 1️⃣ SCRAPE (15 PARALLEL SHARDS: 14 BMS + 1 District -> AllindiaAdvance-Shards)
 # =====================================================
   scrape:
     runs-on: ubuntu-latest
@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,12]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 
     env:
       SHARD_ID: ${{ matrix.shard }}
@@ -55,10 +55,34 @@ jobs:
       # 4. Install Dependencies
       - name: Install dependencies
         run: |
-          pip install playwright cloudscraper aiohttp pytz aiohttp-retry curl_cffi
+          pip install playwright cloudscraper aiohttp pytz aiohttp-retry
           if [ "${{ steps.playwright-cache.outputs.cache-hit }}" != "true" ]; then
             python -m playwright install chromium
           fi
+
+      # 4b. Setup Cloudflare WARP (Bypasses Datacenter IP Blocks for BMS Shards 1-14)
+      - name: Setup Cloudflare WARP
+        if: matrix.shard != 15
+        run: |
+          echo "=================================================="
+          echo "📍 IP BEFORE WARP: $(curl -s https://api.ipify.org || curl -s https://ifconfig.me || echo 'Unknown')"
+          echo "=================================================="
+
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+          sudo apt-get update && sudo apt-get install -y cloudflare-warp
+
+          sudo systemctl start warp-svc.service || sudo service warp-svc start || true
+          sleep 2
+
+          warp-cli --accept-tos registration new 2>/dev/null || warp-cli --accept-tos register 2>/dev/null || true
+          warp-cli --accept-tos mode warp 2>/dev/null || warp-cli --accept-tos set-mode warp 2>/dev/null || true
+          warp-cli --accept-tos connect 2>/dev/null || true
+          sleep 4
+
+          echo "=================================================="
+          echo "🚀 IP AFTER WARP: $(curl -s https://api.ipify.org || curl -s https://ifconfig.me || echo 'Unknown')"
+          echo "=================================================="
 
       # 4. Fast Sparse Clone Shards Repo (< 2 seconds)
       - name: Fast Clone Shards Repository
@@ -74,7 +98,7 @@ jobs:
           export DATA_DIR="$(pwd)/shards_repo/data"
           cd code_repo
 
-          if [ "$SHARD_ID" == "12" ]; then
+          if [ "$SHARD_ID" == "15" ]; then
             python district_advance.py "$DATE_CODE"
           else
             xvfb-run python bms_advance.py "$SHARD_ID" "$DATE_CODE"
@@ -135,7 +159,7 @@ jobs:
 
           git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.DATA_REPO }}.git data_repo
 
-      # 5. Wait for All 12 Shards
+      # 5. Wait for All 15 Shards (14 BMS + 1 District)
       - name: Wait for All Shards
         run: |
           cd shards_repo
@@ -143,9 +167,9 @@ jobs:
             echo "Checking shards sync attempt $i/25..."
             git pull --rebase origin main || true
             READY_SHARDS=$(find data/${DATE_CODE} -type f \( -name "detailed*.csv.gz" -o -name "detailed*.json.gz" -o -name "detailed*.json" \) 2>/dev/null | wc -l)
-            echo "📊 Found $READY_SHARDS / 12 shards ready."
-            if [ "$READY_SHARDS" -ge 12 ]; then
-              echo "✅ All 12 shards available!"
+            echo "📊 Found $READY_SHARDS / 15 shards ready."
+            if [ "$READY_SHARDS" -ge 15 ]; then
+              echo "✅ All 15 shards available!"
               break
             fi
             sleep 20
