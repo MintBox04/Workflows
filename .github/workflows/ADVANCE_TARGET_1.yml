@@ -1,4 +1,4 @@
-name: TARGET DATE 1 (3-Repo Architecture)
+name: TARGET DATE 1
 
 on:
   workflow_dispatch:
@@ -60,8 +60,9 @@ jobs:
             python -m playwright install chromium
           fi
 
-      # 4b. Setup Cloudflare WARP (Bypasses Datacenter IP Blocks)
+      # 4b. Setup Cloudflare WARP (Bypasses Datacenter IP Blocks for BMS Shards 1-14)
       - name: Setup Cloudflare WARP
+        if: matrix.shard != 15
         run: |
           echo "=================================================="
           echo "📍 IP BEFORE WARP: $(curl -s https://api.ipify.org || curl -s https://ifconfig.me || echo 'Unknown')"
