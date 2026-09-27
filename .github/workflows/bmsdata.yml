@@ -1,0 +1,246 @@
+name: BMS Scraper (8 Parallel Shards)
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: bms-scrape-${{ github.ref }}
+  cancel-in-progress: false
+
+# 🌍 GLOBAL ENV - SINGLE REPOSITORY CONFIGURATION (Code & Data in BmsData)
+env:
+  DATA_REPO: MintBox04/BmsData
+
+jobs:
+
+  # =====================================================
+  # 1. SCRAPE 8 SHARDS IN PARALLEL
+  # =====================================================
+  scrape_shards:
+    name: Shard ${{ matrix.display }} / 8
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    strategy:
+      fail-fast: false
+
+      matrix:
+        include:
+          - shard: 0
+            display: 1
+          - shard: 1
+            display: 2
+          - shard: 2
+            display: 3
+          - shard: 3
+            display: 4
+          - shard: 4
+            display: 5
+          - shard: 5
+            display: 6
+          - shard: 6
+            display: 7
+          - shard: 7
+            display: 8
+
+    steps:
+
+      # -------------------------------------------------
+      # 1. Python Setup
+      # -------------------------------------------------
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # -------------------------------------------------
+      # 2. Dependencies
+      # -------------------------------------------------
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install cloudscraper beautifulsoup4
+
+      # -------------------------------------------------
+      # 3. Clone Repository (MintBox04/BmsData)
+      # -------------------------------------------------
+      - name: Clone BmsData Repository
+        run: |
+          git clone https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.DATA_REPO }}.git bms_repo
+          cd bms_repo
+          mkdir -p data/shards
+
+      # -------------------------------------------------
+      # 4. Run Scraper Shard
+      # -------------------------------------------------
+      - name: Run Shard ${{ matrix.display }}
+        run: |
+          cd bms_repo
+          echo "Running shard ${{ matrix.display }}/8"
+          
+          SCRIPT_PATH=""
+          if [ -f "bmsData/bmsData.py" ]; then
+            SCRIPT_PATH="bmsData/bmsData.py"
+          elif [ -f "bmsData.py" ]; then
+            SCRIPT_PATH="bmsData.py"
+          else
+            SCRIPT_PATH=$(find . -name "bmsData.py" | head -n 1)
+          fi
+
+          if [ -z "$SCRIPT_PATH" ]; then
+            echo "❌ Error: Could not find bmsData.py in ${{ env.DATA_REPO }}"
+            exit 1
+          fi
+
+          echo "🚀 Executing $SCRIPT_PATH ${{ matrix.shard }} 8..."
+          python "$SCRIPT_PATH" ${{ matrix.shard }} 8
+
+      # -------------------------------------------------
+      # 5. Commit & Push Shard to BmsData
+      # -------------------------------------------------
+      - name: Commit & Push Shard
+        run: |
+          cd bms_repo
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          mkdir -p data/shards
+          git add data/shards/
+
+          if git diff --cached --quiet; then
+            echo "No changes for shard ${{ matrix.display }}"
+            exit 0
+          fi
+
+          git commit -m "[skip ci] Update BMS shard ${{ matrix.display }}/8"
+
+          # Random delay to reduce simultaneous push contention
+          sleep $((RANDOM % 10 + 2))
+
+          for i in {1..30}; do
+            echo "=========================================="
+            echo "Push attempt $i/30 for Shard ${{ matrix.display }}"
+            echo "=========================================="
+            git pull --rebase --autostash origin main || true
+            if git push origin main; then
+              echo "✅ Shard ${{ matrix.display }} pushed successfully to ${{ env.DATA_REPO }}"
+              exit 0
+            fi
+            sleep $((RANDOM % 6 + 3))
+          done
+
+          echo "❌ Failed to push shard ${{ matrix.display }} after 30 attempts"
+          exit 1
+
+
+  # =====================================================
+  # 2. COMBINE ALL SHARDS
+  # =====================================================
+  combine_and_save:
+
+    name: Combine & Enrich
+
+    needs: scrape_shards
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+
+      # -------------------------------------------------
+      # 1. Python Setup
+      # -------------------------------------------------
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # -------------------------------------------------
+      # 2. Dependencies
+      # -------------------------------------------------
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install cloudscraper beautifulsoup4
+
+      # -------------------------------------------------
+      # 3. Clone Repository (MintBox04/BmsData)
+      # -------------------------------------------------
+      - name: Clone BmsData Repository
+        run: |
+          git clone https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.DATA_REPO }}.git bms_repo
+
+      # -------------------------------------------------
+      # 4. Combine + Enrich
+      # -------------------------------------------------
+      - name: Combine Shards & Enrich Movie Details
+        run: |
+          cd bms_repo
+          echo "🔄 Combining shard data..."
+
+          SCRIPT_PATH=""
+          if [ -f "bmsData/combine.py" ]; then
+            SCRIPT_PATH="bmsData/combine.py"
+          elif [ -f "combine.py" ]; then
+            SCRIPT_PATH="combine.py"
+          else
+            SCRIPT_PATH=$(find . -name "combine.py" | head -n 1)
+          fi
+
+          if [ -z "$SCRIPT_PATH" ]; then
+            echo "❌ Error: Could not find combine.py in ${{ env.DATA_REPO }}"
+            exit 1
+          fi
+
+          echo "🚀 Executing $SCRIPT_PATH data/shards data/output..."
+          python "$SCRIPT_PATH" data/shards data/output
+          echo "✅ Combine completed"
+
+      # -------------------------------------------------
+      # 5. Commit & Push Final Combined Data to BmsData
+      # -------------------------------------------------
+      - name: Commit & Push Final Combined Data
+        run: |
+          cd bms_repo
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add data/output/
+
+          if git diff --cached --quiet; then
+            echo "No changes to combined output"
+            exit 0
+          fi
+
+          git commit -m "Update BMS combined data ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))"
+
+          for i in {1..20}; do
+            echo "Push attempt $i/20 to ${{ env.DATA_REPO }}..."
+            git pull --rebase --autostash origin main || true
+            if git push origin main; then
+              echo "✅ Combined data pushed successfully to ${{ env.DATA_REPO }}"
+              break
+            fi
+            sleep 5
+          done
+
+      # -------------------------------------------------
+      # 6. Deploy to Cloudflare Pages (Optional)
+      # -------------------------------------------------
+      - name: Deploy to Cloudflare Pages
+        if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+        continue-on-error: true
+        run: |
+          cd bms_repo
+          npx wrangler pages project create bmsdata --production-branch=main || true
+          npx wrangler pages deploy data/output --project-name=bmsdata --branch=main --commit-dirty=true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
