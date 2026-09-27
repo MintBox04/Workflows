@@ -1,4 +1,4 @@
-name: BMS Scraper (8 Parallel Shards)
+name: BMS & District Scraper (9 Parallel Shards)
 
 on:
   schedule:
@@ -16,10 +16,10 @@ env:
 jobs:
 
   # =====================================================
-  # 1. SCRAPE 8 SHARDS IN PARALLEL
+  # 1. SCRAPE 9 SHARDS IN PARALLEL (8 BMS + 1 District)
   # =====================================================
   scrape_shards:
-    name: Shard ${{ matrix.display }} / 8
+    name: Shard ${{ matrix.display }} / 9 (${{ matrix.type }})
 
     runs-on: ubuntu-latest
 
@@ -33,20 +33,31 @@ jobs:
         include:
           - shard: 0
             display: 1
+            type: bms
           - shard: 1
             display: 2
+            type: bms
           - shard: 2
             display: 3
+            type: bms
           - shard: 3
             display: 4
+            type: bms
           - shard: 4
             display: 5
+            type: bms
           - shard: 5
             display: 6
+            type: bms
           - shard: 6
             display: 7
+            type: bms
           - shard: 7
             display: 8
+            type: bms
+          - shard: 8
+            display: 9
+            type: dist
 
     steps:
 
@@ -64,7 +75,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install cloudscraper beautifulsoup4
+          pip install cloudscraper beautifulsoup4 requests
 
       # -------------------------------------------------
       # 3. Clone Repository (MintBox04/BmsData)
@@ -73,32 +84,51 @@ jobs:
         run: |
           git clone https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.DATA_REPO }}.git bms_repo
           cd bms_repo
-          mkdir -p data/shards
+          mkdir -p data/shards data/output
 
       # -------------------------------------------------
-      # 4. Run Scraper Shard
+      # 4. Run Scraper Shard (BMS or District)
       # -------------------------------------------------
       - name: Run Shard ${{ matrix.display }}
         run: |
           cd bms_repo
-          echo "Running shard ${{ matrix.display }}/8"
+          echo "Running shard ${{ matrix.display }}/9 (${{ matrix.type }})"
           
-          SCRIPT_PATH=""
-          if [ -f "bmsData/bmsData.py" ]; then
-            SCRIPT_PATH="bmsData/bmsData.py"
-          elif [ -f "bmsData.py" ]; then
-            SCRIPT_PATH="bmsData.py"
+          if [ "${{ matrix.type }}" == "dist" ]; then
+            SCRIPT_PATH=""
+            if [ -f "indiavenues/districtvenues.py" ]; then
+              SCRIPT_PATH="indiavenues/districtvenues.py"
+            elif [ -f "districtvenues.py" ]; then
+              SCRIPT_PATH="districtvenues.py"
+            else
+              SCRIPT_PATH=$(find . -name "districtvenues.py" | head -n 1)
+            fi
+
+            if [ -z "$SCRIPT_PATH" ]; then
+              echo "❌ Error: Could not find districtvenues.py in ${{ env.DATA_REPO }}"
+              exit 1
+            fi
+
+            echo "🚀 Executing District Scraper $SCRIPT_PATH..."
+            python "$SCRIPT_PATH" data/output data/shards
           else
-            SCRIPT_PATH=$(find . -name "bmsData.py" | head -n 1)
-          fi
+            SCRIPT_PATH=""
+            if [ -f "bmsData/bmsData.py" ]; then
+              SCRIPT_PATH="bmsData/bmsData.py"
+            elif [ -f "bmsData.py" ]; then
+              SCRIPT_PATH="bmsData.py"
+            else
+              SCRIPT_PATH=$(find . -name "bmsData.py" | head -n 1)
+            fi
 
-          if [ -z "$SCRIPT_PATH" ]; then
-            echo "❌ Error: Could not find bmsData.py in ${{ env.DATA_REPO }}"
-            exit 1
-          fi
+            if [ -z "$SCRIPT_PATH" ]; then
+              echo "❌ Error: Could not find bmsData.py in ${{ env.DATA_REPO }}"
+              exit 1
+            fi
 
-          echo "🚀 Executing $SCRIPT_PATH ${{ matrix.shard }} 8..."
-          python "$SCRIPT_PATH" ${{ matrix.shard }} 8
+            echo "🚀 Executing BMS Scraper $SCRIPT_PATH ${{ matrix.shard }} 8..."
+            python "$SCRIPT_PATH" ${{ matrix.shard }} 8
+          fi
 
       # -------------------------------------------------
       # 5. Commit & Push Shard to BmsData
@@ -109,15 +139,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          mkdir -p data/shards
-          git add data/shards/
+          mkdir -p data/shards data/output
+          git add data/shards/ data/output/
 
           if git diff --cached --quiet; then
             echo "No changes for shard ${{ matrix.display }}"
             exit 0
           fi
 
-          git commit -m "[skip ci] Update BMS shard ${{ matrix.display }}/8"
+          git commit -m "[skip ci] Update BMS shard ${{ matrix.display }}/9 (${{ matrix.type }})"
 
           # Random delay to reduce simultaneous push contention
           sleep $((RANDOM % 10 + 2))
@@ -168,7 +198,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install cloudscraper beautifulsoup4
+          pip install cloudscraper beautifulsoup4 requests
 
       # -------------------------------------------------
       # 3. Clone Repository (MintBox04/BmsData)
@@ -219,7 +249,7 @@ jobs:
             exit 0
           fi
 
-          git commit -m "Update BMS combined data ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))"
+          git commit -m "Update BMS & District combined data ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))"
 
           for i in {1..20}; do
             echo "Push attempt $i/20 to ${{ env.DATA_REPO }}..."
