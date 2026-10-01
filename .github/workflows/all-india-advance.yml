@@ -60,6 +60,13 @@ jobs:
             python -m playwright install chromium
           fi
 
+      - name: Cache Cloudflare WARP package
+        if: matrix.shard != 15
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives/*.deb
+          key: ubuntu-24.04-cloudflare-warp-apt-v1
+
       # 4b. Setup Cloudflare WARP (Bypasses Datacenter IP Blocks for BMS Shards 1-14)
       - name: Setup Cloudflare WARP
         if: matrix.shard != 15

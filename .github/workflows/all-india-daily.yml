@@ -1,22 +1,22 @@
-name: ALL india Daily
+name: ALL INDIA DAILY
 
 on:
-
   workflow_dispatch:
 
 concurrency:
-  group: bmsd-${{ github.ref }}
+  group: all-india-daily-${{ github.ref }}
   cancel-in-progress: false
 
-# 🌍 GLOBAL ENV
+# 🌍 GLOBAL ENV - 3 REPOSITORIES CONFIGURATION
 env:
-  REPO: MintBox04/AllIndiaDaily
-  DATA_DIR: daily/data
+  CODE_REPO: MintBox04/IndiaCodes
+  SHARDS_REPO: MintBox04/Allindiadaily-shards
+  DATA_REPO: MintBox04/Allindiadaily-data
 
 jobs:
 
 # =====================================================
-# 1️⃣ SCRAPE (PARALLEL SHARDS)
+# 1️⃣ SCRAPE (15 PARALLEL SHARDS: 14 BMS + 1 District -> Allindiadaily-shards)
 # =====================================================
   scrape:
     runs-on: ubuntu-latest
@@ -24,181 +24,234 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1,2,3,4,5,6,7,8,9,10,11,12]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 
     env:
       SHARD_ID: ${{ matrix.shard }}
 
     steps:
-      # ✅ Checkout PRIVATE repo
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.REPO }}
-          token: ${{ secrets.GH_PAT }}
-          fetch-depth: 1
+      # 1. Clone Code Repository (IndiaCodes)
+      - name: Clone Code Repository
+        run: |
+          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.CODE_REPO }}.git code_repo
 
-      # 🐍 Python
+      # 2. Setup Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # 📦 Install deps
-      - name: Cache Playwright browsers
+      # 3. Cache Playwright Browsers
+      - name: Cache Playwright Browsers
+        id: playwright-cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}
-        
+          key: ${{ runner.os }}-playwright-chromium-v1
+          restore-keys: |
+            ${{ runner.os }}-playwright-chromium-
+
+      # 4. Install Dependencies
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install playwright cloudscraper aiohttp pytz
-          python -m playwright install chromium
+          pip install undetected-chromedriver playwright cloudscraper aiohttp pytz aiohttp-retry
+          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" != "true" ]; then
+            python -m playwright install chromium
+          fi
 
-      # 🚀 Run scraper
-      - name: Run scraper
+      - name: Cache Cloudflare WARP package
+        if: matrix.shard != 15
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives/*.deb
+          key: ubuntu-24.04-cloudflare-warp-apt-v1
+
+      # 4b. Setup Cloudflare WARP (Bypasses Datacenter IP Blocks for BMS Shards 1-14)
+      - name: Setup Cloudflare WARP
+        if: matrix.shard != 15
         run: |
-          echo "Running shard $SHARD_ID"
+          echo "=================================================="
+          echo "📍 IP BEFORE WARP: $(curl -s https://api.ipify.org || curl -s https://ifconfig.me || echo 'Unknown')"
+          echo "=================================================="
 
+          # Jitter to avoid concurrent burst on Cloudflare repo
+          sleep $(( (SHARD_ID * 2) % 8 + 1 ))
+
+          # Download GPG Key with retries
           for i in {1..5}; do
-            echo "Attempt $i"
-
-            if [ "$SHARD_ID" == "12" ]; then
-              python district_scraper.py && break
-            else
-              xvfb-run python run_bms.py $SHARD_ID && break
+            if curl -fsSL --retry 3 --retry-delay 2 https://pkg.cloudflareclient.com/pubkey.gpg -o /tmp/cloudflare.gpg && [ -s /tmp/cloudflare.gpg ]; then
+              sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg /tmp/cloudflare.gpg
+              break
             fi
-
-            echo "Retry..."
-            sleep 10
+            echo "Retrying Cloudflare GPG key download ($i/5)..."
+            sleep 2
           done
 
-      # 📂 Prepare shard output
-      - name: Prepare shard output
-        run: |
-          mkdir -p shard_output/$SHARD_ID
-          cp -r $DATA_DIR/* shard_output/$SHARD_ID/ 2>/dev/null || echo "No data"
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
 
-          echo "Shard $SHARD_ID data:"
-          ls -R shard_output/$SHARD_ID || echo "Empty"
+          # Install WARP with retries
+          for i in {1..3}; do
+            if sudo apt-get update && sudo apt-get install -y cloudflare-warp; then
+              break
+            fi
+            sleep 3
+          done
 
-      # 📤 Push shard individually
-      - name: Push shard to repo
+          sudo systemctl start warp-svc.service || sudo service warp-svc start || true
+          sleep 2
+
+          warp-cli --accept-tos registration new 2>/dev/null || warp-cli --accept-tos register 2>/dev/null || true
+          warp-cli --accept-tos mode warp 2>/dev/null || warp-cli --accept-tos set-mode warp 2>/dev/null || true
+          warp-cli --accept-tos connect 2>/dev/null || true
+          sleep 4
+
+          echo "=================================================="
+          echo "🚀 IP AFTER WARP: $(curl -s https://api.ipify.org || curl -s https://ifconfig.me || echo 'Unknown')"
+          echo "=================================================="
+
+      # 5. Compute Date Code (Today IST)
+      - name: Compute Date Code
         run: |
+          DATE_CODE=$(python -c "from datetime import datetime, timedelta, timezone; print((datetime.now(timezone(timedelta(hours=5, minutes=30)))).strftime('%Y%m%d'))")
+          echo "DATE_CODE=$DATE_CODE" >> $GITHUB_ENV
+          echo "🚀 Running Daily Shard $SHARD_ID for Date: $DATE_CODE"
+
+      # 6. Fast Sparse Clone Shards Repo (< 2 seconds)
+      - name: Fast Clone Shards Repository
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.SHARDS_REPO }}.git shards_repo
+          cd shards_repo
+          git sparse-checkout set data/$DATE_CODE/shards
+
+      # 7. Run Scraper Shard (bms_daily.py / district_daily.py)
+      - name: Run Scraper Shard
+        run: |
+          export DATA_DIR="$(pwd)/shards_repo/data"
+          cd code_repo
+
+          if [ "$SHARD_ID" == "15" ]; then
+            python district_daily.py "$DATE_CODE"
+          else
+            xvfb-run python bms_daily.py "$SHARD_ID" "$DATE_CODE"
+          fi
+
+      # 8. Push Shard to Allindiadaily-shards (With Auto-Rebase Retry)
+      - name: Push Shard to Shards Repo
+        run: |
+          cd shards_repo
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          mkdir -p $DATA_DIR
-          cp -r shard_output/$SHARD_ID/* $DATA_DIR/ 2>/dev/null || echo "No data to push"
-
-          git add $DATA_DIR/
-
-          git commit -m "[skip ci] Shard $SHARD_ID ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes for shard $SHARD_ID"
+          git add data/
+          git commit -m "[skip ci] Daily Shard $SHARD_ID ($DATE_CODE - $(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes to commit"
 
           for i in {1..20}; do
-            echo "Push attempt $i for shard $SHARD_ID"
-            
-            git pull --rebase origin main || true
-            
-            if git push; then
-              echo "Push success for shard $SHARD_ID"
+            echo "Push attempt $i/20 for Shard $SHARD_ID..."
+            git pull --rebase --autostash origin main || true
+            if git push origin main; then
+              echo "✅ Shard $SHARD_ID successfully pushed to ${{ env.SHARDS_REPO }}"
               break
             fi
-            
-            echo "Push failed, retrying..."
-            sleep 5
+            sleep $((RANDOM % 5 + 3))
           done
 
 
 # =====================================================
-# 2️⃣ COMBINE + PUSH
+# 2️⃣ COMBINE & LOGS (Outputs -> Allindiadaily-data)
 # =====================================================
   combine:
     needs: scrape
     runs-on: ubuntu-latest
 
     steps:
-      # ✅ Checkout PRIVATE repo with push access
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.REPO }}
-          token: ${{ secrets.GH_PAT }}
-          fetch-depth: 1
-
-      # 📥 Pull all pushed shard data
-      - name: Pull latest data
+      # 1. Clone Code Repository (IndiaCodes)
+      - name: Clone Code Repository
         run: |
-          echo "Waiting for shards to be available..."
-          sleep 10
-          
-          for i in {1..5}; do
-            echo "Pull attempt $i"
-            
-            git fetch origin main
-            git reset --hard origin/main
-            
-            if [ -d "$DATA_DIR" ] && [ "$(ls -A $DATA_DIR)" ]; then
-              echo "Data pulled successfully"
-              ls -R $DATA_DIR
-              break
-            fi
-            
-            echo "Data not ready, retrying..."
-            sleep 5
-          done
-          
-          echo "Current data structure:"
-          ls -R $DATA_DIR || echo "No data available"
+          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.CODE_REPO }}.git code_repo
 
-      # 🐍 Python
+      # 2. Setup Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # 📦 Install deps
+      # 3. Install Dependencies
       - name: Install dependencies
         run: |
-          pip install numpy rapidfuzz pytz
+          pip install numpy pytz
 
-      # 🧠 Combine logic
-      - name: Run combine script
+      # 4. Compute Date Code (Today IST)
+      - name: Compute Date Code
         run: |
-          for i in {1..5}; do
-            echo "Combine attempt $i"
+          DATE_CODE=$(python -c "from datetime import datetime, timedelta, timezone; print((datetime.now(timezone(timedelta(hours=5, minutes=30)))).strftime('%Y%m%d'))")
+          echo "DATE_CODE=$DATE_CODE" >> $GITHUB_ENV
+          echo "🎯 Target Daily Date Code: $DATE_CODE"
 
-            if python combine_shards.py; then
-              echo "Combine success"
+      # 5. Fast Sparse Clone Shards & Data Repositories (< 3 seconds total)
+      - name: Fast Clone Repositories
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.SHARDS_REPO }}.git shards_repo
+          cd shards_repo
+          git sparse-checkout set data/$DATE_CODE
+          cd ..
+
+          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.DATA_REPO }}.git data_repo
+
+      # 6. Wait for All 15 Shards (14 BMS + 1 District)
+      - name: Wait for All Shards
+        run: |
+          cd shards_repo
+          for i in {1..25}; do
+            echo "Checking shards sync attempt $i/25..."
+            git pull --rebase origin main || true
+            READY_SHARDS=$(find data/${DATE_CODE} -type f \( -name "detailed*.csv.gz" -o -name "detailed*.json.gz" -o -name "detailed*.json" \) 2>/dev/null | wc -l)
+            echo "📊 Found $READY_SHARDS / 15 shards ready."
+            if [ "$READY_SHARDS" -ge 15 ]; then
+              echo "✅ All 15 shards available!"
               break
             fi
-
-            echo "Retry combine..."
-            sleep 5
+            sleep 20
           done
 
-      # 💾 Commit combined output
-      - name: Commit & Push combined
+      # 7. Execute Combiner Script
+      - name: Combine Shards & Generate Trend
         run: |
+          export DATA_DIR="$(pwd)/data_repo/data"
+          export SHARDS_DIR="$(pwd)/shards_repo/data/${DATE_CODE}/shards"
+          export FINAL_DIR="$(pwd)/data_repo/data/${DATE_CODE}"
+
+          mkdir -p "$FINAL_DIR"
+
+          cd code_repo
+          python combine_shards.py "$DATE_CODE" daily
+
+      # 8. Commit & Push Final Data & Logs to Allindiadaily-data
+      - name: Push Final Data & Logs to Data Repo
+        run: |
+          cd data_repo
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add daily/data/
+          git add data/
+          git commit -m "Update Daily Final Data & Growth Logs ($DATE_CODE - $(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes to commit"
 
-          git commit -m "Combined data ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No new changes"
-
-          for i in {1..5}; do
-            echo "Push attempt $i"
-
-            git pull --rebase origin main || true
-
-            if git push; then
-              echo "Push success"
+          for i in {1..10}; do
+            echo "Push attempt $i to ${{ env.DATA_REPO }}..."
+            git pull --rebase --autostash origin main || true
+            if git push origin main; then
+              echo "✅ Final data & logs successfully pushed to ${{ env.DATA_REPO }}"
               break
             fi
-
-            echo "Push failed, retrying..."
             sleep 5
           done
+
+      # 9. Fast Direct Deploy to Cloudflare Pages (< 4 seconds)
+      - name: Deploy to Cloudflare Pages
+        if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+        continue-on-error: true
+        run: |
+          npx wrangler pages project create dailysalesv2 --production-branch=main || true
+          npx wrangler pages deploy data_repo/data --project-name=dailysalesv2 --branch=main --commit-dirty=true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
