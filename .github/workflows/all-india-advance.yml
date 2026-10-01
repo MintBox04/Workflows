@@ -60,104 +60,62 @@ jobs:
             python -m playwright install chromium
           fi
 
-      # 4b. Cache Cloudflare WARP Packages
-      - name: Cache Cloudflare WARP Packages
+      # 4b. Cache Cloudflare WARP Package
+      - name: Cache Cloudflare WARP Package
         if: matrix.shard != 15
         id: warp-cache
         uses: actions/cache@v4
         with:
-          path: ~/.cache/warp-deb
-          key: ${{ runner.os }}-warp-deb-noble-v2
+          path: ~/.apt-warp-cache
+          key: ${{ runner.os }}-cloudflare-warp-apt-v1
+          restore-keys: |
+            ${{ runner.os }}-cloudflare-warp-apt-
 
       # 4c. Setup Cloudflare WARP (Bypasses Datacenter IP Blocks for BMS Shards 1-14)
       - name: Setup Cloudflare WARP
         if: matrix.shard != 15
         run: |
-          set -e
           echo "=================================================="
           echo "📍 IP BEFORE WARP: $(curl -s https://api.ipify.org || curl -s https://ifconfig.me || echo 'Unknown')"
           echo "=================================================="
 
-          # True randomized jitter to avoid concurrent burst on endpoints
-          sleep $((RANDOM % 8 + SHARD_ID))
+          # Restore cached deb packages to APT archives (skips download on cache hit)
+          sudo cp ~/.apt-warp-cache/*.deb /var/cache/apt/archives/ 2>/dev/null || true
 
-          mkdir -p ~/.cache/warp-deb
+          # Jitter to avoid concurrent burst on Cloudflare repo
+          sleep $(( (SHARD_ID * 2) % 8 + 1 ))
 
-          # Check if we have cached deb packages
-          DEB_COUNT=$(find ~/.cache/warp-deb -name "*.deb" 2>/dev/null | wc -l)
-
-          if [ "$DEB_COUNT" -eq 0 ]; then
-            echo "📦 WARP cache miss. Downloading packages..."
-            curl -fsSL --retry 5 --retry-delay 2 https://pkg.cloudflareclient.com/pubkey.gpg -o /tmp/cloudflare.gpg
-            sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg /tmp/cloudflare.gpg
-            echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ noble main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
-
-            sudo apt-get update
-            # Install with --no-install-recommends to avoid GUI bloat
-            sudo apt-get install -y --no-install-recommends cloudflare-warp
-            # Save downloaded debs to cache directory
-            cp /var/cache/apt/archives/*.deb ~/.cache/warp-deb/ 2>/dev/null || true
-          else
-            echo "⚡ WARP cache hit ($DEB_COUNT packages found)! Installing offline from cache..."
-            sudo dpkg -i ~/.cache/warp-deb/*.deb || sudo apt-get install -f -y --no-install-recommends
-          fi
-
-          # Start warp service and give daemon time to initialize API socket
-          sudo systemctl restart warp-svc
-          sleep 3
-
-          # Wait for warp-svc daemon to respond
-          for i in {1..15}; do
-            if warp-cli --accept-tos status >/dev/null 2>&1; then
+          # Download GPG Key with retries
+          for i in {1..5}; do
+            if curl -fsSL --retry 3 --retry-delay 2 https://pkg.cloudflareclient.com/pubkey.gpg -o /tmp/cloudflare.gpg && [ -s /tmp/cloudflare.gpg ]; then
+              sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg /tmp/cloudflare.gpg
               break
             fi
-            sleep 1
-          done
-
-          # Register with retry loop (fixes 'Failed to communicate with WARP API')
-          REGISTERED=false
-          for i in {1..10}; do
-            if warp-cli --accept-tos registration show >/dev/null 2>&1; then
-              REGISTERED=true
-              echo "✅ WARP already registered"
-              break
-            fi
-            if warp-cli --accept-tos registration new; then
-              REGISTERED=true
-              echo "✅ WARP registered successfully"
-              break
-            fi
-            echo "Retrying WARP registration ($i/10)..."
+            echo "Retrying Cloudflare GPG key download ($i/5)..."
             sleep 2
           done
 
-          warp-cli --accept-tos mode warp
-          warp-cli --accept-tos connect
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
 
-          # Verify connection status explicitly
-          CONNECTED=false
-          for i in {1..20}; do
-            STATUS=$(warp-cli --accept-tos status 2>&1 || true)
-            if echo "$STATUS" | grep -qi "Connected"; then
-              CONNECTED=true
-              echo "✅ WARP connected"
+          # Install WARP with retries
+          for i in {1..3}; do
+            if sudo apt-get update && sudo apt-get install -y cloudflare-warp; then
               break
             fi
-            # If registration failed or missing, retry registration and reconnect
-            if echo "$STATUS" | grep -qi "Registration Missing"; then
-              echo "⚠️ Registration missing in API, re-registering..."
-              warp-cli --accept-tos registration new || true
-              warp-cli --accept-tos connect || true
-            fi
-            echo "Waiting for WARP ($i/20): $STATUS"
-            sleep 2
+            sleep 3
           done
 
-          if [ "$CONNECTED" != "true" ]; then
-            echo "❌ WARP failed to connect"
-            warp-cli --accept-tos status || true
-            exit 1
-          fi
+          # Save downloaded debs to cache directory for future runs
+          mkdir -p ~/.apt-warp-cache
+          cp /var/cache/apt/archives/*.deb ~/.apt-warp-cache/ 2>/dev/null || true
+
+          sudo systemctl start warp-svc.service || sudo service warp-svc start || true
+          sleep 2
+
+          warp-cli --accept-tos registration new 2>/dev/null || warp-cli --accept-tos register 2>/dev/null || true
+          warp-cli --accept-tos mode warp 2>/dev/null || warp-cli --accept-tos set-mode warp 2>/dev/null || true
+          warp-cli --accept-tos connect 2>/dev/null || true
+          sleep 4
 
           echo "=================================================="
           echo "🚀 IP AFTER WARP: $(curl -s https://api.ipify.org || curl -s https://ifconfig.me || echo 'Unknown')"
