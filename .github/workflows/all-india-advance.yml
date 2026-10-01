@@ -60,51 +60,82 @@ jobs:
             python -m playwright install chromium
           fi
 
-      - name: Cache Cloudflare WARP package
+      # 4b. Cache Cloudflare WARP Package
+      - name: Cache Cloudflare WARP Package
         if: matrix.shard != 15
+        id: warp-cache
         uses: actions/cache@v4
         with:
-          path: /var/cache/apt/archives/*.deb
-          key: ubuntu-24.04-cloudflare-warp-apt-v1
+          path: ~/.cache/warp-deb
+          key: ${{ runner.os }}-warp-deb-noble-v1
 
-      # 4b. Setup Cloudflare WARP (Bypasses Datacenter IP Blocks for BMS Shards 1-14)
+      # 4c. Setup Cloudflare WARP (Bypasses Datacenter IP Blocks for BMS Shards 1-14)
       - name: Setup Cloudflare WARP
         if: matrix.shard != 15
         run: |
+          set -e
           echo "=================================================="
           echo "📍 IP BEFORE WARP: $(curl -s https://api.ipify.org || curl -s https://ifconfig.me || echo 'Unknown')"
           echo "=================================================="
 
-          # Jitter to avoid concurrent burst on Cloudflare repo
-          sleep $(( (SHARD_ID * 2) % 8 + 1 ))
+          # True randomized jitter to avoid concurrent burst on endpoints
+          sleep $((RANDOM % 8 + SHARD_ID))
 
-          # Download GPG Key with retries
-          for i in {1..5}; do
-            if curl -fsSL --retry 3 --retry-delay 2 https://pkg.cloudflareclient.com/pubkey.gpg -o /tmp/cloudflare.gpg && [ -s /tmp/cloudflare.gpg ]; then
-              sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg /tmp/cloudflare.gpg
+          mkdir -p ~/.cache/warp-deb
+          WARP_DEB="$HOME/.cache/warp-deb/cloudflare-warp.deb"
+
+          # Only download if NOT present in GitHub Actions cache (skips 129MB desktop GUI bloat)
+          if [ ! -s "$WARP_DEB" ]; then
+            echo "📦 Cloudflare WARP not in cache. Downloading deb package..."
+            curl -fsSL --retry 5 --retry-delay 2 https://pkg.cloudflareclient.com/pubkey.gpg -o /tmp/cloudflare.gpg
+            sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg /tmp/cloudflare.gpg
+            echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ noble main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+
+            # Targeted update ONLY for Cloudflare repo (skips slow Ubuntu mirror syncs)
+            sudo apt-get update -o Dir::Etc::sourcelist="sources.list.d/cloudflare-client.list" -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0" || sudo apt-get update
+            cd ~/.cache/warp-deb
+            apt-get download cloudflare-warp
+            mv cloudflare-warp*.deb cloudflare-warp.deb
+            cd -
+          else
+            echo "⚡ Cloudflare WARP found in cache! Skipping network download & apt-get update."
+          fi
+
+          # Install WITHOUT recommended desktop packages (avoids WebKitGTK / Gstreamer 129MB bloat)
+          sudo dpkg -i "$WARP_DEB" || sudo apt-get install --no-install-recommends -f -y
+
+          # Start daemon and wait until socket is ready
+          sudo systemctl start warp-svc
+          for i in {1..10}; do
+            if warp-cli --accept-tos status >/dev/null 2>&1; then
               break
             fi
-            echo "Retrying Cloudflare GPG key download ($i/5)..."
+            sleep 1
+          done
+
+          # Register & Connect
+          warp-cli --accept-tos registration new || true
+          warp-cli --accept-tos mode warp
+          warp-cli --accept-tos connect
+
+          # Verify connection status explicitly
+          CONNECTED=false
+          for i in {1..15}; do
+            STATUS=$(warp-cli --accept-tos status 2>&1 || true)
+            if echo "$STATUS" | grep -qi "Connected"; then
+              CONNECTED=true
+              echo "✅ WARP connected"
+              break
+            fi
+            echo "Waiting for WARP ($i/15): $STATUS"
             sleep 2
           done
 
-          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
-
-          # Install WARP with retries
-          for i in {1..3}; do
-            if sudo apt-get update && sudo apt-get install -y cloudflare-warp; then
-              break
-            fi
-            sleep 3
-          done
-
-          sudo systemctl start warp-svc.service || sudo service warp-svc start || true
-          sleep 2
-
-          warp-cli --accept-tos registration new 2>/dev/null || warp-cli --accept-tos register 2>/dev/null || true
-          warp-cli --accept-tos mode warp 2>/dev/null || warp-cli --accept-tos set-mode warp 2>/dev/null || true
-          warp-cli --accept-tos connect 2>/dev/null || true
-          sleep 4
+          if [ "$CONNECTED" != "true" ]; then
+            echo "❌ WARP failed to connect"
+            warp-cli --accept-tos status || true
+            exit 1
+          fi
 
           echo "=================================================="
           echo "🚀 IP AFTER WARP: $(curl -s https://api.ipify.org || curl -s https://ifconfig.me || echo 'Unknown')"
