@@ -107,7 +107,7 @@ jobs:
           python bmsinterests.py --city hyderabad --worker-url "${{ env.WORKER_URL }}" --data-dir "data" || echo "⚠️ BMS Scraper encountered an error, continuing to District..."
 
           echo "🍿 Running District Upcoming & Hype Scraper..."
-          python district.py --data-dir "data" || echo "⚠️ District Scraper encountered an error..."
+          python districtinterests.py --data-dir "data" || echo "⚠️ District Scraper encountered an error..."
 
       # 6. Commit & Push /data to MintBox04/bmsinterests (With Auto-Rebase Retry)
       - name: Push Data to GitHub Repository
