@@ -1,10 +1,13 @@
-name: BMS INTERESTS TRACKER
+name: BMS & DISTRICT INTERESTS TRACKER
 
 on:
+  schedule:
+    # Runs every hour at minute 15
+    - cron: "15 * * * *"
   workflow_dispatch:
 
 concurrency:
-  group: bms-interests-${{ github.ref }}
+  group: interests-tracker-${{ github.ref }}
   cancel-in-progress: false
 
 # 🌍 GLOBAL ENV - REPOSITORY CONFIGURATION
@@ -14,7 +17,7 @@ env:
 jobs:
 
 # =====================================================
-# 1️⃣ TRACK & PROCESS (BMS 15 Pages -> /data in MintBox04/bmsinterests)
+# 1️⃣ TRACK & PROCESS (BMS + District -> /data in MintBox04/bmsinterests)
 # =====================================================
   track:
     runs-on: ubuntu-latest
@@ -38,7 +41,7 @@ jobs:
       # 3. Install Dependencies
       - name: Install dependencies
         run: |
-          pip install curl-cffi requests pytz
+          pip install curl-cffi requests pytz cloudscraper 
 
       # 4a. Cache Cloudflare WARP Package
       - name: Cache Cloudflare WARP Package
@@ -96,11 +99,15 @@ jobs:
           echo "🚀 IP AFTER WARP: $(curl -s https://api.ipify.org || curl -s https://ifconfig.me || echo 'Unknown')"
           echo "=================================================="
 
-      # 5. Run BMS Scraper & Save to /data
-      - name: Run BMS Scraper & Save to /data
+      # 5. Run BMS & District Scrapers & Save to /data
+      - name: Run BMS & District Scrapers
         run: |
           cd repo
-          python bmsinterests.py --city hyderabad --worker-url "${{ env.WORKER_URL }}" --data-dir "data"
+          echo "🎬 Running BMS Interests Scraper..."
+          python bmsinterests.py --city hyderabad --worker-url "${{ env.WORKER_URL }}" --data-dir "data" || echo "⚠️ BMS Scraper encountered an error, continuing to District..."
+
+          echo "🍿 Running District Upcoming & Hype Scraper..."
+          python district.py --data-dir "data" || echo "⚠️ District Scraper encountered an error..."
 
       # 6. Commit & Push /data to MintBox04/bmsinterests (With Auto-Rebase Retry)
       - name: Push Data to GitHub Repository
@@ -109,11 +116,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Stage the /data directory (bms_latest and bms_history)
+          # Stage all data files (bms_latest, bms_history, district_latest, district_history)
           git add data/
 
           CURRENT_TIME=$(date -u +'%Y-%m-%d %H:%M:%S UTC')
-          git commit -m "Update BMS Interests Telemetry - $CURRENT_TIME " || echo "No changes to commit"
+          git commit -m "Update BMS & District Interests Telemetry - $CURRENT_TIME [skip ci]" || echo "No changes to commit"
 
           for i in {1..15}; do
             echo "Push attempt $i/15 to ${{ env.DATA_REPO }}..."
