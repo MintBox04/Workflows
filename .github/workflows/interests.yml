@@ -120,7 +120,7 @@ jobs:
           git add data/
 
           CURRENT_TIME=$(date -u +'%Y-%m-%d %H:%M:%S UTC')
-          git commit -m "Update BMS & District Interests Telemetry - $CURRENT_TIME [skip ci]" || echo "No changes to commit"
+          git commit -m "Update BMS & District Interests Telemetry - $CURRENT_TIME" || echo "No changes to commit"
 
           for i in {1..15}; do
             echo "Push attempt $i/15 to ${{ env.DATA_REPO }}..."
