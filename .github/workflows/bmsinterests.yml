@@ -1,0 +1,126 @@
+name: BMS INTERESTS TRACKER
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: bms-interests-${{ github.ref }}
+  cancel-in-progress: false
+
+# 🌍 GLOBAL ENV - REPOSITORY CONFIGURATION
+env:
+  DATA_REPO: MintBox04/bmsinterests
+
+jobs:
+
+# =====================================================
+# 1️⃣ TRACK & PROCESS (BMS 15 Pages -> /data in MintBox04/bmsinterests)
+# =====================================================
+  track:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Clone Target Repository (MintBox04/bmsinterests)
+      - name: Clone BMS Interests Repository
+        run: |
+          if [ -n "${{ secrets.GH_PAT }}" ]; then
+            git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.DATA_REPO }}.git repo
+          else
+            git clone --depth 1 https://github.com/${{ env.DATA_REPO }}.git repo
+          fi
+
+      # 2. Setup Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # 3. Install Dependencies
+      - name: Install dependencies
+        run: |
+          pip install curl-cffi requests pytz
+
+      # 4a. Cache Cloudflare WARP Package
+      - name: Cache Cloudflare WARP Package
+        id: warp-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.apt-warp-cache
+          key: ${{ runner.os }}-cloudflare-warp-apt-v1
+          restore-keys: |
+            ${{ runner.os }}-cloudflare-warp-apt-
+
+      # 4b. Setup Cloudflare WARP (Bypasses Datacenter IP Blocks for BMS)
+      - name: Setup Cloudflare WARP
+        run: |
+          echo "=================================================="
+          echo "📍 IP BEFORE WARP: $(curl -s https://api.ipify.org || curl -s https://ifconfig.me || echo 'Unknown')"
+          echo "=================================================="
+
+          # Restore cached deb packages to APT archives
+          sudo cp ~/.apt-warp-cache/*.deb /var/cache/apt/archives/ 2>/dev/null || true
+
+          # Download GPG Key with retries
+          for i in {1..5}; do
+            if curl -fsSL --retry 3 --retry-delay 2 https://pkg.cloudflareclient.com/pubkey.gpg -o /tmp/cloudflare.gpg && [ -s /tmp/cloudflare.gpg ]; then
+              sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg /tmp/cloudflare.gpg
+              break
+            fi
+            echo "Retrying Cloudflare GPG key download ($i/5)..."
+            sleep 2
+          done
+
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+
+          # Install WARP with retries
+          for i in {1..3}; do
+            if sudo apt-get update && sudo apt-get install -y cloudflare-warp; then
+              break
+            fi
+            sleep 3
+          done
+
+          # Save downloaded debs to cache directory
+          mkdir -p ~/.apt-warp-cache
+          cp /var/cache/apt/archives/*.deb ~/.apt-warp-cache/ 2>/dev/null || true
+
+          sudo systemctl start warp-svc.service || sudo service warp-svc start || true
+          sleep 2
+
+          warp-cli --accept-tos registration new 2>/dev/null || warp-cli --accept-tos register 2>/dev/null || true
+          warp-cli --accept-tos mode warp 2>/dev/null || warp-cli --accept-tos set-mode warp 2>/dev/null || true
+          warp-cli --accept-tos connect 2>/dev/null || true
+          sleep 4
+
+          echo "=================================================="
+          echo "🚀 IP AFTER WARP: $(curl -s https://api.ipify.org || curl -s https://ifconfig.me || echo 'Unknown')"
+          echo "=================================================="
+
+      # 5. Run BMS Scraper & Save to /data
+      - name: Run BMS Scraper & Save to /data
+        run: |
+          cd repo
+          python bmsinterests.py --city hyderabad --worker-url "${{ env.WORKER_URL }}" --data-dir "data"
+
+      # 6. Commit & Push /data to MintBox04/bmsinterests (With Auto-Rebase Retry)
+      - name: Push Data to GitHub Repository
+        run: |
+          cd repo
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Stage the /data directory (bms_latest and bms_history)
+          git add data/
+
+          CURRENT_TIME=$(date -u +'%Y-%m-%d %H:%M:%S UTC')
+          git commit -m "Update BMS Interests Telemetry - $CURRENT_TIME [skip ci]" || echo "No changes to commit"
+
+          for i in {1..15}; do
+            echo "Push attempt $i/15 to ${{ env.DATA_REPO }}..."
+            git pull --rebase --autostash origin main || true
+            if git push origin main; then
+              echo "✅ Successfully pushed /data to ${{ env.DATA_REPO }}"
+              break
+            fi
+            sleep $((RANDOM % 5 + 3))
+          done
