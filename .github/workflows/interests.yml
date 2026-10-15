@@ -1,9 +1,6 @@
 name: BMS & DISTRICT INTERESTS TRACKER
 
 on:
-  schedule:
-    # Runs every hour at minute 15
-    - cron: "15 * * * *"
   workflow_dispatch:
 
 concurrency:
