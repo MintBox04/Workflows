@@ -166,7 +166,18 @@ jobs:
       # 4. Fast Sparse Clone Shards Repo (< 2 seconds)
       - name: Fast Clone Shards Repository
         run: |
-          git clone --depth 1 --filter=blob:none --sparse https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.SHARDS_REPO }}.git shards_repo
+          for attempt in 1 2 3; do
+            if git clone --depth 1 --filter=blob:none --sparse https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.SHARDS_REPO }}.git shards_repo; then
+              break
+            fi
+            echo "Sparse clone failed (attempt $attempt/3)." >&2
+            rm -rf shards_repo
+            if [ "$attempt" -eq 3 ]; then
+              echo "Unable to clone shards repository after 3 attempts." >&2
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
           cd shards_repo
           git sparse-checkout set data/$DATE_CODE/shards
 
@@ -231,7 +242,18 @@ jobs:
       # 4. Fast Clone Shards & Data Repositories (< 3 seconds total)
       - name: Fast Clone Repositories
         run: |
-          git clone --depth 1 --filter=blob:none --sparse https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.SHARDS_REPO }}.git shards_repo
+          for attempt in 1 2 3; do
+            if git clone --depth 1 --filter=blob:none --sparse https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.SHARDS_REPO }}.git shards_repo; then
+              break
+            fi
+            echo "Sparse clone failed (attempt $attempt/3)." >&2
+            rm -rf shards_repo
+            if [ "$attempt" -eq 3 ]; then
+              echo "Unable to clone shards repository after 3 attempts." >&2
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
           cd shards_repo
           git sparse-checkout set data/$DATE_CODE
           cd ..
