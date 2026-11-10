@@ -2,7 +2,9 @@ name: Vietnam Box Office Update
 
 on:
   workflow_dispatch:
-  
+  schedule:
+    # 🕒 Hourly update (at minute 15 of every hour)
+    - cron: "15 * * * *"
 
 # 🔥 Prevent overlapping runs
 concurrency:
@@ -33,19 +35,26 @@ jobs:
         run: |
           cd vietnam
           python -m pip install --upgrade pip
+          pip install beautifulsoup4 tabulate requests pytz
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
           fi
-          pip install beautifulsoup4 tabulate requests pytz
 
-      # 🚀 Run vietnam.py script
+      # 🚀 Run update script (supports vietnam.py or vitenam.py)
       - name: Run update script
         run: |
           cd vietnam
-          if [ -f "vietnam.py" ]; then
+          if [ -f "vitenam.py" ]; then
+            python vitenam.py
+          elif [ -f "vietnam.py" ]; then
             python vietnam.py
+          elif [ -f "src/vitenam.py" ]; then
+            python src/vitenam.py
+          elif [ -f "src/vietnam.py" ]; then
+            python src/vietnam.py
           else
-            echo "❌ vietnam.py not found!"
+            echo "❌ Script not found! Current directory contains:"
+            ls -la
             exit 1
           fi
 
