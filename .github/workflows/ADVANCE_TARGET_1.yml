@@ -1,11 +1,10 @@
-name: ALL INDIA ADVANCE
+name: TARGET DATE 1
 
 on:
-
   workflow_dispatch:
 
 concurrency:
-  group: all-india-advance-${{ github.ref }}
+  group: bms-advance2-${{ github.ref }}
   cancel-in-progress: false
 
 # 🌍 GLOBAL ENV - 3 REPOSITORIES CONFIGURATION
@@ -13,6 +12,7 @@ env:
   CODE_REPO: MintBox04/IndiaCodes
   SHARDS_REPO: MintBox04/AllindiaAdvance-Shards
   DATA_REPO: MintBox04/AllindiaAdvance-data
+  DATE_CODE: "20261008"
 
 jobs:
 
@@ -20,7 +20,7 @@ jobs:
 # 1️⃣ SCRAPE (15 PARALLEL SHARDS: 14 BMS + 1 District -> AllindiaAdvance-Shards)
 # =====================================================
   scrape:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     strategy:
       fail-fast: false
@@ -31,10 +31,6 @@ jobs:
       SHARD_ID: ${{ matrix.shard }}
 
     steps:
-      # 0. Checkout Repository (Ensures working directory exists)
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
       # 1. Clone Code Repository (IndiaCodes)
       - name: Clone Code Repository
         run: |
@@ -56,17 +52,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-playwright-chromium-
 
-      # 4. Install Dependencies & Ensure Xvfb
+      # 4. Install Dependencies
       - name: Install dependencies
         run: |
-          pip install undetected-chromedriver playwright cloudscraper aiohttp pytz aiohttp-retry
+          pip install playwright cloudscraper aiohttp pytz aiohttp-retry
           if [ "${{ steps.playwright-cache.outputs.cache-hit }}" != "true" ]; then
             python -m playwright install chromium
-          fi
-          # Ensure xvfb is installed for headless=False browser execution
-          if ! command -v xvfb-run >/dev/null 2>&1; then
-            sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=15
-            sudo apt-get install -y --no-install-recommends xvfb xauth
           fi
 
       # 4b. Cache Cloudflare WARP Package
@@ -76,9 +67,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.apt-warp-cache/cloudflare-warp.deb
-          key: ${{ runner.os }}-cloudflare-warp-direct-v3
+          key: ${{ runner.os }}-cloudflare-warp-direct-v2
 
-      # 4c. Setup Cloudflare WARP (Direct Extraction - Zero APT Mirrors)
+      # 4c. Setup Cloudflare WARP (Direct Binary Extraction - Zero APT / Zero Mirrors)
       - name: Setup Cloudflare WARP
         if: matrix.shard != 15
         timeout-minutes: 2
@@ -88,43 +79,26 @@ jobs:
           echo "📍 IP BEFORE WARP: $(curl -s https://api.ipify.org || curl -s https://ifconfig.me || echo 'Unknown')"
           echo "=================================================="
 
-          # Fallback DNS
-          sudo sed -i '1inameserver 1.1.1.1\nnameserver 8.8.8.8' /etc/resolv.conf 2>/dev/null || true
-
           mkdir -p ~/.apt-warp-cache
           WARP_DEB="$HOME/.apt-warp-cache/cloudflare-warp.deb"
 
           # 1. Download directly from Cloudflare global CDN if not in cache (No apt-get / No mirrors)
           if [ ! -s "$WARP_DEB" ]; then
             echo "📥 Downloading Cloudflare WARP deb directly..."
-            DISTRO=$(lsb_release -cs 2>/dev/null || echo "jammy")
-            PKG_PATH=$(curl -fsSL --retry 3 --connect-timeout 8 "https://pkg.cloudflareclient.com/dists/${DISTRO}/main/binary-amd64/Packages" 2>/dev/null | grep -m 1 -o 'pool/[^ ]*cloudflare-warp[^ ]*\.deb' || true)
-            if [ -n "$PKG_PATH" ]; then
-              curl -fsSL --retry 3 --connect-timeout 10 "https://pkg.cloudflareclient.com/${PKG_PATH}" -o "$WARP_DEB" || true
-            fi
-            if [ ! -s "$WARP_DEB" ]; then
-              curl -fsSL --retry 3 --connect-timeout 10 "https://pkg.cloudflareclient.com/pool/noble/main/c/cloudflare-warp/cloudflare-warp_2026.8.2115.0_amd64.deb" -o "$WARP_DEB" || true
-            fi
+            curl -fsSL --retry 3 --connect-timeout 10 "https://pkg.cloudflareclient.com/pool/noble/main/c/cloudflare-warp/cloudflare-warp_2026.8.2115.0_amd64.deb" -o "$WARP_DEB" || true
           fi
 
-          # 2. Extract only required binaries from package (avoid mutating runner root filesystem)
+          # 2. Extract binaries directly using dpkg-deb (Bypasses APT completely)
           if [ -s "$WARP_DEB" ]; then
-            WARP_TMP_DIR="$(mktemp -d)"
-            dpkg-deb -x "$WARP_DEB" "$WARP_TMP_DIR"
-            sudo install -m 0755 "$WARP_TMP_DIR/usr/bin/warp-cli" /usr/bin/warp-cli 2>/dev/null || true
-            sudo install -m 0755 "$WARP_TMP_DIR/usr/bin/warp-svc" /usr/bin/warp-svc 2>/dev/null || true
-
-            # Install service unit and start daemon
-            sudo cp "$WARP_TMP_DIR/lib/systemd/system/warp-svc.service" /etc/systemd/system/ 2>/dev/null || sudo cp "$WARP_TMP_DIR/usr/lib/systemd/system/warp-svc.service" /etc/systemd/system/ 2>/dev/null || true
+            sudo dpkg-deb -x "$WARP_DEB" /
             sudo systemctl daemon-reload 2>/dev/null || true
-            sudo systemctl start warp-svc.service 2>/dev/null || sudo /usr/bin/warp-svc >/dev/null 2>&1 &
-            sleep 3
+            sudo systemctl start warp-svc.service || sudo service warp-svc start || true
+            sleep 2
 
             warp-cli --accept-tos registration new 2>/dev/null || warp-cli --accept-tos register 2>/dev/null || true
             warp-cli --accept-tos mode warp 2>/dev/null || warp-cli --accept-tos set-mode warp 2>/dev/null || true
             warp-cli --accept-tos connect 2>/dev/null || true
             sleep 3
-            rm -rf "$WARP_TMP_DIR"
           else
             echo "⚠️ Cloudflare WARP package not available, continuing with direct runner IP..."
           fi
@@ -133,37 +107,27 @@ jobs:
           echo "🚀 IP AFTER WARP: $(curl -s https://api.ipify.org || curl -s https://ifconfig.me || echo 'Unknown')"
           echo "=================================================="
 
-      # 4. Compute Date Code (Tomorrow IST)
-      - name: Compute Date Code
-        run: |
-          DATE_CODE=$(python -c "from datetime import datetime, timedelta, timezone; print((datetime.now(timezone(timedelta(hours=5, minutes=30))) + timedelta(days=1)).strftime('%Y%m%d'))")
-          echo "DATE_CODE=$DATE_CODE" >> $GITHUB_ENV
-          echo "🚀 Running Shard $SHARD_ID for Date: $DATE_CODE"
-
-      # 5. Fast Sparse Clone Shards Repo (< 2 seconds)
+      # 4. Fast Sparse Clone Shards Repo (< 2 seconds)
       - name: Fast Clone Shards Repository
         run: |
           git clone --depth 1 --filter=blob:none --sparse https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.SHARDS_REPO }}.git shards_repo
           cd shards_repo
           git sparse-checkout set data/$DATE_CODE/shards
 
-      # 6. Run Scraper Shard (bms_advance_uc.py / district_advance.py)
+      # 5. Run Scraper Shard (bms_advance.py / district_advance.py)
       - name: Run Scraper Shard
         run: |
+          echo "🚀 Running Shard $SHARD_ID for Target Date: $DATE_CODE"
           export DATA_DIR="$(pwd)/shards_repo/data"
           cd code_repo
 
           if [ "$SHARD_ID" == "15" ]; then
             python district_advance.py "$DATE_CODE"
           else
-            if command -v xvfb-run >/dev/null 2>&1; then
-              xvfb-run -a python bms_advance.py "$SHARD_ID" "$DATE_CODE"
-            else
-              python bms_advance.py "$SHARD_ID" "$DATE_CODE"
-            fi
+            xvfb-run python bms_advance.py "$SHARD_ID" "$DATE_CODE"
           fi
 
-      # 7. Push Shard to AllindiaAdvance-Shards (With Auto-Rebase Retry)
+      # 6. Push Shard to AllindiaAdvance-Shards (With Auto-Rebase Retry)
       - name: Push Shard to Shards Repo
         run: |
           cd shards_repo
@@ -171,7 +135,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add data/
-          git commit -m "[skip ci] Shard $SHARD_ID ($DATE_CODE - $(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes to commit"
+          git commit -m "[skip ci] Target Date Shard $SHARD_ID ($DATE_CODE - $(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes to commit"
 
           for i in {1..20}; do
             echo "Push attempt $i/20 for Shard $SHARD_ID..."
@@ -189,7 +153,7 @@ jobs:
 # =====================================================
   combine:
     needs: scrape
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     steps:
       # 1. Clone Code Repository (IndiaCodes)
@@ -208,14 +172,7 @@ jobs:
         run: |
           pip install numpy pytz
 
-      # 4. Compute Date Code (Tomorrow IST)
-      - name: Compute Date Code
-        run: |
-          DATE_CODE=$(python -c "from datetime import datetime, timedelta, timezone; print((datetime.now(timezone(timedelta(hours=5, minutes=30))) + timedelta(days=1)).strftime('%Y%m%d'))")
-          echo "DATE_CODE=$DATE_CODE" >> $GITHUB_ENV
-          echo "🎯 Target Date Code: $DATE_CODE"
-
-      # 5. Fast Sparse Clone Shards & Data Repositories (< 3 seconds total)
+      # 4. Fast Clone Shards & Data Repositories (< 3 seconds total)
       - name: Fast Clone Repositories
         run: |
           git clone --depth 1 --filter=blob:none --sparse https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.SHARDS_REPO }}.git shards_repo
@@ -225,7 +182,7 @@ jobs:
 
           git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.DATA_REPO }}.git data_repo
 
-      # 6. Wait for All 15 Shards (14 BMS + 1 District)
+      # 5. Wait for All 15 Shards (14 BMS + 1 District)
       - name: Wait for All Shards
         run: |
           cd shards_repo
@@ -241,7 +198,7 @@ jobs:
             sleep 20
           done
 
-      # 7. Execute Combiner Script
+      # 6. Execute Combiner Script
       - name: Combine Shards & Generate Trend
         run: |
           export DATA_DIR="$(pwd)/data_repo/data"
@@ -253,7 +210,7 @@ jobs:
           cd code_repo
           python combine_shards.py "$DATE_CODE" advance
 
-      # 8. Commit & Push Final Data & Logs to AllindiaAdvance-data
+      # 7. Commit & Push Final Data & Logs to AllindiaAdvance-data
       - name: Push Final Data & Logs to Data Repo
         run: |
           cd data_repo
@@ -261,7 +218,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add data/
-          git commit -m "Update Final Data & Growth Logs ($DATE_CODE - $(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes to commit"
+          git commit -m "Update Target Date Data & Growth Logs ($DATE_CODE - $(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes to commit"
 
           for i in {1..10}; do
             echo "Push attempt $i to ${{ env.DATA_REPO }}..."
@@ -273,7 +230,7 @@ jobs:
             sleep 5
           done
 
-      # 9. Fast Direct Deploy to Cloudflare Pages (< 4 seconds)
+      # 8. Fast Direct Deploy to Cloudflare Pages (< 4 seconds)
       - name: Deploy to Cloudflare Pages
         if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
         continue-on-error: true
