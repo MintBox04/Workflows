@@ -69,65 +69,45 @@ jobs:
             sudo apt-get install -y --no-install-recommends xvfb xauth
           fi
 
-      # 4b. Cache Cloudflare WARP Package
-      - name: Cache Cloudflare WARP Package
-        if: matrix.shard != 15
-        id: warp-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.apt-warp-cache/cloudflare-warp.deb
-          key: ${{ runner.os }}-cloudflare-warp-direct-v3
-
-      # 4c. Setup Cloudflare WARP (Direct Extraction - Zero APT Mirrors)
+      # 4b. Setup Cloudflare WARP (Fast Targeted APT - Zero Azure Mirror Hangs)
       - name: Setup Cloudflare WARP
         if: matrix.shard != 15
-        timeout-minutes: 2
+        timeout-minutes: 3
         continue-on-error: true
         run: |
           echo "=================================================="
           echo "📍 IP BEFORE WARP: $(curl -s https://api.ipify.org || curl -s https://ifconfig.me || echo 'Unknown')"
           echo "=================================================="
 
-          # Fallback DNS
+          # 1. Fallback DNS
           sudo sed -i '1inameserver 1.1.1.1\nnameserver 8.8.8.8' /etc/resolv.conf 2>/dev/null || true
 
-          mkdir -p ~/.apt-warp-cache
-          WARP_DEB="$HOME/.apt-warp-cache/cloudflare-warp.deb"
-
-          # 1. Download directly from Cloudflare global CDN if not in cache (No apt-get / No mirrors)
-          if [ ! -s "$WARP_DEB" ]; then
-            echo "📥 Downloading Cloudflare WARP deb directly..."
-            DISTRO=$(lsb_release -cs 2>/dev/null || echo "jammy")
-            PKG_PATH=$(curl -fsSL --retry 3 --connect-timeout 8 "https://pkg.cloudflareclient.com/dists/${DISTRO}/main/binary-amd64/Packages" 2>/dev/null | grep -m 1 -o 'pool/[^ ]*cloudflare-warp[^ ]*\.deb' || true)
-            if [ -n "$PKG_PATH" ]; then
-              curl -fsSL --retry 3 --connect-timeout 10 "https://pkg.cloudflareclient.com/${PKG_PATH}" -o "$WARP_DEB" || true
+          # 2. Add Cloudflare GPG Key with retries
+          for i in {1..5}; do
+            if curl -fsSL --retry 3 --retry-delay 2 https://pkg.cloudflareclient.com/pubkey.gpg -o /tmp/cloudflare.gpg && [ -s /tmp/cloudflare.gpg ]; then
+              sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp.gpg /tmp/cloudflare.gpg
+              break
             fi
-            if [ ! -s "$WARP_DEB" ]; then
-              curl -fsSL --retry 3 --connect-timeout 10 "https://pkg.cloudflareclient.com/pool/noble/main/c/cloudflare-warp/cloudflare-warp_2026.8.2115.0_amd64.deb" -o "$WARP_DEB" || true
-            fi
-          fi
+            sleep 2
+          done
 
-          # 2. Extract only required binaries from package (avoid mutating runner root filesystem)
-          if [ -s "$WARP_DEB" ]; then
-            WARP_TMP_DIR="$(mktemp -d)"
-            dpkg-deb -x "$WARP_DEB" "$WARP_TMP_DIR"
-            sudo install -m 0755 "$WARP_TMP_DIR/usr/bin/warp-cli" /usr/bin/warp-cli 2>/dev/null || true
-            sudo install -m 0755 "$WARP_TMP_DIR/usr/bin/warp-svc" /usr/bin/warp-svc 2>/dev/null || true
+          # 3. Add Cloudflare repository source
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
 
-            # Install service unit and start daemon
-            sudo cp "$WARP_TMP_DIR/lib/systemd/system/warp-svc.service" /etc/systemd/system/ 2>/dev/null || sudo cp "$WARP_TMP_DIR/usr/lib/systemd/system/warp-svc.service" /etc/systemd/system/ 2>/dev/null || true
-            sudo systemctl daemon-reload 2>/dev/null || true
-            sudo systemctl start warp-svc.service 2>/dev/null || sudo /usr/bin/warp-svc >/dev/null 2>&1 &
-            sleep 3
+          # 4. Targeted APT update (ONLY queries Cloudflare CDN in 0.5s - NEVER touches azure mirrors)
+          sudo apt-get update -o Dir::Etc::sourcelist="sources.list.d/cloudflare-client.list" -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0" -o Acquire::Retries=3 -o Acquire::http::Timeout=15
 
-            warp-cli --accept-tos registration new 2>/dev/null || warp-cli --accept-tos register 2>/dev/null || true
-            warp-cli --accept-tos mode warp 2>/dev/null || warp-cli --accept-tos set-mode warp 2>/dev/null || true
-            warp-cli --accept-tos connect 2>/dev/null || true
-            sleep 3
-            rm -rf "$WARP_TMP_DIR"
-          else
-            echo "⚠️ Cloudflare WARP package not available, continuing with direct runner IP..."
-          fi
+          # 5. Fast install cloudflare-warp (properly registers systemd service)
+          sudo apt-get install -y --no-install-recommends -o Acquire::Retries=3 -o Acquire::http::Timeout=15 cloudflare-warp
+
+          # 6. Start WARP daemon & connect
+          sudo systemctl start warp-svc.service 2>/dev/null || sudo /usr/bin/warp-svc >/dev/null 2>&1 &
+          sleep 3
+
+          warp-cli --accept-tos registration new 2>/dev/null || warp-cli --accept-tos register 2>/dev/null || true
+          warp-cli --accept-tos mode warp 2>/dev/null || warp-cli --accept-tos set-mode warp 2>/dev/null || true
+          warp-cli --accept-tos connect 2>/dev/null || true
+          sleep 4
 
           echo "=================================================="
           echo "🚀 IP AFTER WARP: $(curl -s https://api.ipify.org || curl -s https://ifconfig.me || echo 'Unknown')"
