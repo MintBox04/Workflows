@@ -2,36 +2,26 @@ name: BMS HOURLY TREND TRACKER
 
 on:
   schedule:
-    # Runs every hour at minute 5
-    - cron: "5 * * * *"
+    # Runs every hour at minute 2 (between 0 and 5 minutes)
+    - cron: "2 * * * *"
   workflow_dispatch:
 
 concurrency:
   group: bms-hourly-trend-${{ github.ref }}
   cancel-in-progress: false
 
-# 🌍 GLOBAL ENV - TARGET REPOSITORY (Code & Data in MintBox04/bmsTrend)
+# 🌍 GLOBAL ENV - SINGLE REPOSITORY CONFIGURATION (Code & Data in bmsTrend)
 env:
   DATA_REPO: MintBox04/bmsTrend
 
 jobs:
-  track:
-    runs-on: ubuntu-latest
+  track_trend:
+    name: Track BMS Hourly Trends (All-India)
+    runs-on: ubuntu-24.04
 
     steps:
       # -------------------------------------------------
-      # 1. Clone Target Repository (MintBox04/bmsTrend)
-      # -------------------------------------------------
-      - name: Clone BMS Trend Repository
-        run: |
-          if [ -n "${{ secrets.GH_PAT }}" ]; then
-            git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.DATA_REPO }}.git repo
-          else
-            git clone --depth 1 https://github.com/${{ env.DATA_REPO }}.git repo
-          fi
-
-      # -------------------------------------------------
-      # 2. Setup Python
+      # 1. Setup Python
       # -------------------------------------------------
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -39,84 +29,45 @@ jobs:
           python-version: "3.11"
 
       # -------------------------------------------------
-      # 3. Install Dependencies
+      # 2. Install Dependencies
       # -------------------------------------------------
       - name: Install dependencies
         run: |
-          pip install curl-cffi requests pytz cloudscraper
+          python -m pip install --upgrade pip
+          pip install cloudscraper
 
       # -------------------------------------------------
-      # 4a. Cache Cloudflare WARP Package
+      # 3. Compute Date Code (IST)
       # -------------------------------------------------
-      - name: Cache Cloudflare WARP Package
-        id: warp-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.apt-warp-cache
-          key: ${{ runner.os }}-cloudflare-warp-apt-v1
-          restore-keys: |
-            ${{ runner.os }}-cloudflare-warp-apt-
-
-      # -------------------------------------------------
-      # 4b. Setup Cloudflare WARP (Bypasses Datacenter IP Blocks for BMS)
-      # -------------------------------------------------
-      - name: Setup Cloudflare WARP
+      - name: Compute Date Code
         run: |
-          echo "=================================================="
-          echo "📍 IP BEFORE WARP: $(curl -s https://api.ipify.org || curl -s https://ifconfig.me || echo 'Unknown')"
-          echo "=================================================="
-
-          # Restore cached deb packages to APT archives
-          sudo cp ~/.apt-warp-cache/*.deb /var/cache/apt/archives/ 2>/dev/null || true
-
-          # Download GPG Key with retries
-          for i in {1..5}; do
-            if curl -fsSL --retry 3 --retry-delay 2 https://pkg.cloudflareclient.com/pubkey.gpg -o /tmp/cloudflare.gpg && [ -s /tmp/cloudflare.gpg ]; then
-              sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg /tmp/cloudflare.gpg
-              break
-            fi
-            echo "Retrying Cloudflare GPG key download ($i/5)..."
-            sleep 2
-          done
-
-          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
-
-          # Install WARP with retries
-          for i in {1..3}; do
-            if sudo apt-get update && sudo apt-get install -y cloudflare-warp; then
-              break
-            fi
-            sleep 3
-          done
-
-          # Save downloaded debs to cache directory
-          mkdir -p ~/.apt-warp-cache
-          cp /var/cache/apt/archives/*.deb ~/.apt-warp-cache/ 2>/dev/null || true
-
-          sudo systemctl start warp-svc.service || sudo service warp-svc start || true
-          sleep 2
-
-          warp-cli --accept-tos registration new 2>/dev/null || warp-cli --accept-tos register 2>/dev/null || true
-          warp-cli --accept-tos mode warp 2>/dev/null || warp-cli --accept-tos set-mode warp 2>/dev/null || true
-          warp-cli --accept-tos connect 2>/dev/null || true
-          sleep 4
-
-          echo "=================================================="
-          echo "🚀 IP AFTER WARP: $(curl -s https://api.ipify.org || curl -s https://ifconfig.me || echo 'Unknown')"
-          echo "=================================================="
+          DATE_CODE=$(python -c "from datetime import datetime, timedelta, timezone; print(datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime('%Y%m%d'))")
+          echo "DATE_CODE=$DATE_CODE" >> $GITHUB_ENV
+          echo "🎯 Target Date Code: $DATE_CODE"
 
       # -------------------------------------------------
-      # 5. Run BMS Trend Tracker Inside Repository
+      # 4. Clone Repository (MintBox04/bmsTrend)
+      # -------------------------------------------------
+      - name: Clone bmsTrend Repository
+        run: |
+          git clone https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.DATA_REPO }}.git bms_repo
+          cd bms_repo
+          echo "Files in ${{ env.DATA_REPO }}:"
+          ls -la
+
+      # -------------------------------------------------
+      # 5. Run Trend Tracker Inside Repository
       # -------------------------------------------------
       - name: Run Trend Tracker
         run: |
-          cd repo
+          cd bms_repo
 
+          # Locate trend.py inside bms_repo
           SCRIPT_PATH=""
-          if [ -f "trend.py" ]; then
-            SCRIPT_PATH="trend.py"
-          elif [ -f "bmstrend/trend.py" ]; then
+          if [ -f "bmstrend/trend.py" ]; then
             SCRIPT_PATH="bmstrend/trend.py"
+          elif [ -f "trend.py" ]; then
+            SCRIPT_PATH="trend.py"
           else
             SCRIPT_PATH=$(find . -name "trend.py" | head -n 1)
           fi
@@ -126,35 +77,48 @@ jobs:
             exit 1
           fi
 
-          echo "🚀 Running $SCRIPT_PATH..."
+          echo "🚀 Executing $SCRIPT_PATH..."
           python "$SCRIPT_PATH" --output-dir data
 
+          # Ensure dashboard is copied to root index.html
           if [ -f "data/dashboard.html" ]; then
-            cp -f data/dashboard.html index.html
+            cp data/dashboard.html index.html
           elif [ -f "bmstrend/index.html" ]; then
-            cp -f bmstrend/index.html index.html
+            cp bmstrend/index.html index.html
           fi
 
       # -------------------------------------------------
-      # 6. Commit & Push Data to GitHub Repository
+      # 6. Commit & Push Data to MintBox04/bmsTrend (Auto-Rebase Retry)
       # -------------------------------------------------
-      - name: Push Data to GitHub Repository
+      - name: Push Data to MintBox04/bmsTrend
         run: |
-          cd repo
+          cd bms_repo
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add data/ index.html || git add .
+          git commit -m "Update BMS Hourly Trends ($DATE_CODE - $(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes to commit"
 
-          CURRENT_TIME=$(date -u +'%Y-%m-%d %H:%M:%S UTC')
-          git commit -m "Update BMS Hourly Trends - $CURRENT_TIME" || echo "No changes to commit"
-
-          for i in {1..15}; do
-            echo "Push attempt $i/15 to ${{ env.DATA_REPO }}..."
+          for i in {1..20}; do
+            echo "Push attempt $i to ${{ env.DATA_REPO }}..."
             git pull --rebase --autostash origin main || true
             if git push origin main; then
-              echo "✅ Successfully pushed trend data to ${{ env.DATA_REPO }}"
+              echo "✅ Final BMS trend data successfully pushed to ${{ env.DATA_REPO }}"
               break
             fi
-            sleep $((RANDOM % 5 + 3))
+            sleep 5
           done
+
+      # -------------------------------------------------
+      # 7. Fast Direct Deploy to Cloudflare Pages (Optional)
+      # -------------------------------------------------
+      - name: Deploy to Cloudflare Pages
+        if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+        continue-on-error: true
+        run: |
+          cd bms_repo
+          npx wrangler pages project create bmstrend --production-branch=main || true
+          npx wrangler pages deploy data --project-name=bmstrend --branch=main --commit-dirty=true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

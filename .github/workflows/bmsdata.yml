@@ -21,7 +21,7 @@ jobs:
   scrape_shards:
     name: Shard ${{ matrix.display }} / 9 (${{ matrix.type }})
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     permissions:
       contents: write
@@ -177,7 +177,7 @@ jobs:
 
     needs: scrape_shards
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     permissions:
       contents: write

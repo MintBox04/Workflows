@@ -7,13 +7,16 @@ on:
 
 # 🔥 prevent overlapping runs
 concurrency:
-  group: srilanka-target-${{ github.ref }}
+  group: srilanka-target-${{ github.ref }}-${{ matrix.date }}
   cancel-in-progress: true
+
+permissions:
+  contents: write
 
 jobs:
   scrape:
-    runs-on: ubuntu-latest
-    timeout-minutes: 240      # 4-hour job cap
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
 
     strategy:
       fail-fast: false
@@ -28,7 +31,11 @@ jobs:
       # 🔒 Clone PRIVATE repo
       - name: Clone Private Repo
         run: |
-          git clone --depth=1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git
+          if [ -n "${{ secrets.GH_PAT }}" ]; then
+            git clone --depth=1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git
+          else
+            git clone --depth=1 https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ env.REPO }}.git
+          fi
 
       # 🐍 Setup Python
       - name: Set up Python
@@ -61,7 +68,13 @@ jobs:
       - name: Install Playwright Chromium
         run: |
           cd srilanka
-          python -m playwright install chromium --with-deps
+          # Fallback DNS to avoid Azure mirror resolution errors
+          sudo sed -i '1inameserver 1.1.1.1\nnameserver 8.8.8.8' /etc/resolv.conf 2>/dev/null || true
+          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" != "true" ]; then
+            python -m playwright install --with-deps chromium
+          else
+            python -m playwright install-deps chromium || true
+          fi
 
       # 🎬 Run scraper
       - name: Run scraper
@@ -107,9 +120,16 @@ jobs:
             find . -name "__pycache__" -type d -exec rm -rf {} + || true
             git rm -rf --cached __pycache__ 2>/dev/null || true
 
-            if git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git; then
-              echo "✅ Push succeeded"
-              break
+            if [ -n "${{ secrets.GH_PAT }}" ]; then
+              if git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git main; then
+                echo "✅ Push succeeded"
+                break
+              fi
+            else
+              if git push origin main; then
+                echo "✅ Push succeeded"
+                break
+              fi
             fi
 
             echo "❌ Push failed. Retrying in 5 seconds..."

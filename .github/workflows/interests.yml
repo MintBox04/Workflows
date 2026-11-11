@@ -1,6 +1,9 @@
 name: BMS & DISTRICT INTERESTS TRACKER
 
 on:
+  schedule:
+    # Hourly tracking (every hour at minute 15)
+    - cron: "15 * * * *"
   workflow_dispatch:
 
 concurrency:
@@ -11,13 +14,17 @@ concurrency:
 env:
   DATA_REPO: MintBox04/bmsinterests
 
+permissions:
+  contents: write
+
 jobs:
 
 # =====================================================
 # 1️⃣ TRACK & PROCESS (BMS + District -> /data in MintBox04/bmsinterests)
 # =====================================================
   track:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
 
     steps:
       # 1. Clone Target Repository (MintBox04/bmsinterests)
@@ -26,7 +33,7 @@ jobs:
           if [ -n "${{ secrets.GH_PAT }}" ]; then
             git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.DATA_REPO }}.git repo
           else
-            git clone --depth 1 https://github.com/${{ env.DATA_REPO }}.git repo
+            git clone --depth 1 https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ env.DATA_REPO }}.git repo
           fi
 
       # 2. Setup Python
@@ -38,7 +45,7 @@ jobs:
       # 3. Install Dependencies
       - name: Install dependencies
         run: |
-          pip install curl-cffi requests pytz cloudscraper 
+          pip install --no-cache-dir curl-cffi requests pytz cloudscraper
 
       # 4a. Cache Cloudflare WARP Package
       - name: Cache Cloudflare WARP Package
@@ -52,15 +59,19 @@ jobs:
 
       # 4b. Setup Cloudflare WARP (Bypasses Datacenter IP Blocks for BMS)
       - name: Setup Cloudflare WARP
+        timeout-minutes: 5
         run: |
           echo "=================================================="
           echo "📍 IP BEFORE WARP: $(curl -s https://api.ipify.org || curl -s https://ifconfig.me || echo 'Unknown')"
           echo "=================================================="
 
-          # Restore cached deb packages to APT archives
+          # 1. Fallback DNS to avoid mirror lookup failures on Azure runner
+          sudo sed -i '1inameserver 1.1.1.1\nnameserver 8.8.8.8' /etc/resolv.conf 2>/dev/null || true
+
+          # 2. Restore cached deb packages to APT archives (skips download on cache hit)
           sudo cp ~/.apt-warp-cache/*.deb /var/cache/apt/archives/ 2>/dev/null || true
 
-          # Download GPG Key with retries
+          # 3. Download GPG Key with retries
           for i in {1..5}; do
             if curl -fsSL --retry 3 --retry-delay 2 https://pkg.cloudflareclient.com/pubkey.gpg -o /tmp/cloudflare.gpg && [ -s /tmp/cloudflare.gpg ]; then
               sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg /tmp/cloudflare.gpg
@@ -72,25 +83,31 @@ jobs:
 
           echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
 
-          # Install WARP with retries
+          # 4. Fast install WARP with no recommended GUI bloat and strict timeouts
+          export DEBIAN_FRONTEND=noninteractive
+          APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15"
           for i in {1..3}; do
-            if sudo apt-get update && sudo apt-get install -y cloudflare-warp; then
+            if sudo apt-get $APT_OPTS update && sudo apt-get install -y --no-install-recommends $APT_OPTS cloudflare-warp; then
               break
             fi
             sleep 3
           done
 
-          # Save downloaded debs to cache directory
+          # Save downloaded debs to cache directory for future runs
           mkdir -p ~/.apt-warp-cache
           cp /var/cache/apt/archives/*.deb ~/.apt-warp-cache/ 2>/dev/null || true
 
-          sudo systemctl start warp-svc.service || sudo service warp-svc start || true
-          sleep 2
+          if command -v warp-cli >/dev/null 2>&1; then
+            sudo systemctl start warp-svc.service || sudo service warp-svc start || true
+            sleep 2
 
-          warp-cli --accept-tos registration new 2>/dev/null || warp-cli --accept-tos register 2>/dev/null || true
-          warp-cli --accept-tos mode warp 2>/dev/null || warp-cli --accept-tos set-mode warp 2>/dev/null || true
-          warp-cli --accept-tos connect 2>/dev/null || true
-          sleep 4
+            warp-cli --accept-tos registration new 2>/dev/null || warp-cli --accept-tos register 2>/dev/null || true
+            warp-cli --accept-tos mode warp 2>/dev/null || warp-cli --accept-tos set-mode warp 2>/dev/null || true
+            warp-cli --accept-tos connect 2>/dev/null || true
+            sleep 4
+          else
+            echo "⚠️ WARNING: cloudflare-warp not installed; continuing without WARP..."
+          fi
 
           echo "=================================================="
           echo "🚀 IP AFTER WARP: $(curl -s https://api.ipify.org || curl -s https://ifconfig.me || echo 'Unknown')"
@@ -100,8 +117,9 @@ jobs:
       - name: Run BMS & District Scrapers
         run: |
           cd repo
+          mkdir -p data
           echo "🎬 Running BMS Interests Scraper..."
-          python bmsinterests.py --city hyderabad --worker-url "${{ env.WORKER_URL }}" --data-dir "data" || echo "⚠️ BMS Scraper encountered an error, continuing to District..."
+          python bmsinterests.py --city hyderabad --worker-url "${{ secrets.WORKER_URL || env.WORKER_URL }}" --data-dir "data" || echo "⚠️ BMS Scraper encountered an error, continuing to District..."
 
           echo "🍿 Running District Upcoming & Hype Scraper..."
           python districtinterests.py --data-dir "data" || echo "⚠️ District Scraper encountered an error..."
