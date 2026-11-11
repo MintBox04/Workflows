@@ -20,7 +20,7 @@ jobs:
 # 1️⃣ SCRAPE (15 PARALLEL SHARDS: 14 BMS + 1 District -> AllindiaAdvance-Shards)
 # =====================================================
   scrape:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
 
     strategy:
       fail-fast: false
@@ -31,6 +31,10 @@ jobs:
       SHARD_ID: ${{ matrix.shard }}
 
     steps:
+      # 0. Checkout Repository (Ensures working directory exists)
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
       # 1. Clone Code Repository (IndiaCodes)
       - name: Clone Code Repository
         run: |
@@ -52,12 +56,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-playwright-chromium-
 
-      # 4. Install Dependencies
+      # 4. Install Dependencies & Ensure Xvfb
       - name: Install dependencies
         run: |
           pip install undetected-chromedriver playwright cloudscraper aiohttp pytz aiohttp-retry
           if [ "${{ steps.playwright-cache.outputs.cache-hit }}" != "true" ]; then
             python -m playwright install chromium
+          fi
+          # Ensure xvfb is installed for headless=False browser execution
+          if ! command -v xvfb-run >/dev/null 2>&1; then
+            sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=15
+            sudo apt-get install -y --no-install-recommends xvfb xauth
           fi
 
       # 4b. Cache Cloudflare WARP Package
@@ -67,9 +76,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.apt-warp-cache/cloudflare-warp.deb
-          key: ${{ runner.os }}-cloudflare-warp-direct-v2
+          key: ${{ runner.os }}-cloudflare-warp-direct-v3
 
-      # 4c. Setup Cloudflare WARP (Direct Binary Extraction - Zero APT / Zero Mirrors)
+      # 4c. Setup Cloudflare WARP (Direct Extraction - Zero APT Mirrors)
       - name: Setup Cloudflare WARP
         if: matrix.shard != 15
         timeout-minutes: 2
@@ -79,26 +88,43 @@ jobs:
           echo "📍 IP BEFORE WARP: $(curl -s https://api.ipify.org || curl -s https://ifconfig.me || echo 'Unknown')"
           echo "=================================================="
 
+          # Fallback DNS
+          sudo sed -i '1inameserver 1.1.1.1\nnameserver 8.8.8.8' /etc/resolv.conf 2>/dev/null || true
+
           mkdir -p ~/.apt-warp-cache
           WARP_DEB="$HOME/.apt-warp-cache/cloudflare-warp.deb"
 
           # 1. Download directly from Cloudflare global CDN if not in cache (No apt-get / No mirrors)
           if [ ! -s "$WARP_DEB" ]; then
             echo "📥 Downloading Cloudflare WARP deb directly..."
-            curl -fsSL --retry 3 --connect-timeout 10 "https://pkg.cloudflareclient.com/pool/noble/main/c/cloudflare-warp/cloudflare-warp_2026.8.2115.0_amd64.deb" -o "$WARP_DEB" || true
+            DISTRO=$(lsb_release -cs 2>/dev/null || echo "jammy")
+            PKG_PATH=$(curl -fsSL --retry 3 --connect-timeout 8 "https://pkg.cloudflareclient.com/dists/${DISTRO}/main/binary-amd64/Packages" 2>/dev/null | grep -m 1 -o 'pool/[^ ]*cloudflare-warp[^ ]*\.deb' || true)
+            if [ -n "$PKG_PATH" ]; then
+              curl -fsSL --retry 3 --connect-timeout 10 "https://pkg.cloudflareclient.com/${PKG_PATH}" -o "$WARP_DEB" || true
+            fi
+            if [ ! -s "$WARP_DEB" ]; then
+              curl -fsSL --retry 3 --connect-timeout 10 "https://pkg.cloudflareclient.com/pool/noble/main/c/cloudflare-warp/cloudflare-warp_2026.8.2115.0_amd64.deb" -o "$WARP_DEB" || true
+            fi
           fi
 
-          # 2. Extract binaries directly using dpkg-deb (Bypasses APT completely)
+          # 2. Extract only required binaries from package (avoid mutating runner root filesystem)
           if [ -s "$WARP_DEB" ]; then
-            sudo dpkg-deb -x "$WARP_DEB" /
+            WARP_TMP_DIR="$(mktemp -d)"
+            dpkg-deb -x "$WARP_DEB" "$WARP_TMP_DIR"
+            sudo install -m 0755 "$WARP_TMP_DIR/usr/bin/warp-cli" /usr/bin/warp-cli 2>/dev/null || true
+            sudo install -m 0755 "$WARP_TMP_DIR/usr/bin/warp-svc" /usr/bin/warp-svc 2>/dev/null || true
+
+            # Install service unit and start daemon
+            sudo cp "$WARP_TMP_DIR/lib/systemd/system/warp-svc.service" /etc/systemd/system/ 2>/dev/null || sudo cp "$WARP_TMP_DIR/usr/lib/systemd/system/warp-svc.service" /etc/systemd/system/ 2>/dev/null || true
             sudo systemctl daemon-reload 2>/dev/null || true
-            sudo systemctl start warp-svc.service || sudo service warp-svc start || true
-            sleep 2
+            sudo systemctl start warp-svc.service 2>/dev/null || sudo /usr/bin/warp-svc >/dev/null 2>&1 &
+            sleep 3
 
             warp-cli --accept-tos registration new 2>/dev/null || warp-cli --accept-tos register 2>/dev/null || true
             warp-cli --accept-tos mode warp 2>/dev/null || warp-cli --accept-tos set-mode warp 2>/dev/null || true
             warp-cli --accept-tos connect 2>/dev/null || true
             sleep 3
+            rm -rf "$WARP_TMP_DIR"
           else
             echo "⚠️ Cloudflare WARP package not available, continuing with direct runner IP..."
           fi
@@ -130,7 +156,11 @@ jobs:
           if [ "$SHARD_ID" == "15" ]; then
             python district_advance.py "$DATE_CODE"
           else
-            xvfb-run  python bms_advance.py "$SHARD_ID" "$DATE_CODE"
+            if command -v xvfb-run >/dev/null 2>&1; then
+              xvfb-run -a python bms_advance.py "$SHARD_ID" "$DATE_CODE"
+            else
+              python bms_advance.py "$SHARD_ID" "$DATE_CODE"
+            fi
           fi
 
       # 7. Push Shard to AllindiaAdvance-Shards (With Auto-Rebase Retry)
@@ -159,7 +189,7 @@ jobs:
 # =====================================================
   combine:
     needs: scrape
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
 
     steps:
       # 1. Clone Code Repository (IndiaCodes)
