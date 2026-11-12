@@ -69,101 +69,80 @@ jobs:
             sudo apt-get install -y --no-install-recommends xvfb xauth
           fi
 
-      # 4b. Setup Cloudflare WARP (Direct Extraction - Zero APT Mirrors)
       - name: Setup Cloudflare WARP
         if: matrix.shard != 15
-        timeout-minutes: 2
+        timeout-minutes: 5
         continue-on-error: true
         run: |
           echo "=================================================="
-          OLD_IP=$(curl -s --connect-timeout 5 https://api.ipify.org || curl -s --connect-timeout 5 https://ifconfig.me || echo 'Unknown')
-          echo "📍 IP BEFORE WARP: $OLD_IP"
+          echo "📍 IP BEFORE WARP: $(curl -s https://api.ipify.org || curl -s https://ifconfig.me || echo 'Unknown')"
           echo "=================================================="
-
-          # Fallback DNS
-          sudo sed -i '1inameserver 1.1.1.1\nnameserver 8.8.8.8' /etc/resolv.conf 2>/dev/null || true
-
+          # Restore cached deb packages to APT archives (skips download on cache hit)
+          sudo cp ~/.apt-warp-cache/*.deb /var/cache/apt/archives/ 2>/dev/null || true
+          # Jitter to avoid concurrent burst on Cloudflare repo
+          sleep $(( (SHARD_ID * 2) % 8 + 1 ))
+          # Download GPG Key with retries
+          for i in {1..5}; do
+            if curl -fsSL --retry 3 --retry-delay 2 https://pkg.cloudflareclient.com/pubkey.gpg -o /tmp/cloudflare.gpg && [ -s /tmp/cloudflare.gpg ]; then
+              sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg /tmp/cloudflare.gpg
+              break
+            fi
+            echo "Retrying Cloudflare GPG key download ($i/5)..."
+            sleep 2
+          done
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+          # Install WARP with retries
+          for i in {1..3}; do
+            if sudo apt-get update && sudo apt-get install -y cloudflare-warp; then
+              break
+            fi
+            sleep 3
+          done
+          # Save downloaded debs to cache directory for future runs
           mkdir -p ~/.apt-warp-cache
-          WARP_DEB="$HOME/.apt-warp-cache/cloudflare-warp.deb"
-
-          # 1. Download directly from Cloudflare global CDN if not in cache (No apt-get / No mirrors)
-          if [ ! -s "$WARP_DEB" ]; then
-            echo "📥 Downloading Cloudflare WARP deb directly..."
-            DISTRO=$(lsb_release -cs 2>/dev/null || echo "jammy")
-            PKG_PATH=$(curl -fsSL --retry 3 --connect-timeout 8 "https://pkg.cloudflareclient.com/dists/${DISTRO}/main/binary-amd64/Packages" 2>/dev/null | grep -m 1 -o 'pool/[^ ]*cloudflare-warp[^ ]*\.deb' || true)
-            if [ -n "$PKG_PATH" ]; then
-              curl -fsSL --retry 3 --connect-timeout 10 "https://pkg.cloudflareclient.com/${PKG_PATH}" -o "$WARP_DEB" || true
+          cp /var/cache/apt/archives/*.deb ~/.apt-warp-cache/ 2>/dev/null || true
+          # ---------------------------------------------------------
+          # MANUAL DAEMON STARTUP (systemctl is unavailable on GH runners)
+          # ---------------------------------------------------------
+          echo "Starting D-Bus system bus manually..."
+          sudo mkdir -p /run/dbus
+          sudo dbus-daemon --system --fork 2>/dev/null || true
+          sleep 2
+          echo "Starting warp-svc in the background..."
+          sudo warp-svc --accept-tos > /tmp/warp-svc.log 2>&1 &
+          
+          # Wait for the daemon socket to become ready
+          for i in $(seq 1 15); do
+            if warp-cli --accept-tos status >/dev/null 2>&1; then
+              echo "✅ warp-svc is ready."
+              break
             fi
-            if [ ! -s "$WARP_DEB" ]; then
-              curl -fsSL --retry 3 --connect-timeout 10 "https://pkg.cloudflareclient.com/pool/jammy/main/c/cloudflare-warp/cloudflare-warp_2026.8.2115.0_amd64.deb" -o "$WARP_DEB" || true
+            echo "⏳ Waiting for warp-svc... ($i/15)"
+            sleep 1
+          done
+          # ---------------------------------------------------------
+          # REGISTRATION & TUN MODE
+          # ---------------------------------------------------------
+          warp-cli --accept-tos registration new 2>/dev/null || warp-cli --accept-tos register 2>/dev/null || true
+          sleep 1
+          # Explicitly set full tunnel mode
+          warp-cli --accept-tos mode warp 2>/dev/null || warp-cli --accept-tos set-mode warp 2>/dev/null || true
+          
+          # Connect and wait for the tunnel to establish
+          warp-cli --accept-tos connect 2>/dev/null || true
+          for i in {1..10}; do
+            STATUS=$(warp-cli --accept-tos status 2>/dev/null | head -1 || true)
+            if echo "$STATUS" | grep -qi "connected"; then
+              echo "✅ WARP tunnel connected."
+              break
             fi
-          fi
-
-          if [ -s "$WARP_DEB" ]; then
-            # 2. Setup user and directories required by warp-svc
-            sudo useradd --system --no-create-home --home-dir /var/lib/cloudflare-warp --shell /usr/sbin/nologin --user-group warp 2>/dev/null || true
-            sudo mkdir -p /var/lib/cloudflare-warp /var/log/cloudflare-warp
-            sudo chown -R warp:warp /var/lib/cloudflare-warp /var/log/cloudflare-warp
-            sudo chmod 700 /var/lib/cloudflare-warp
-
-            # 3. Extract deb package without polluting apt
-            sudo dpkg-deb -x "$WARP_DEB" /
-            sudo chmod +x /usr/bin/warp-svc /usr/bin/warp-cli 2>/dev/null || true
-            sudo cp /lib/systemd/system/warp-svc.service /etc/systemd/system/ 2>/dev/null || true
-
-            # 4. Restart dbus and start warp-svc daemon
-            sudo systemctl restart dbus 2>/dev/null || sudo service dbus restart 2>/dev/null || true
-            sudo systemctl daemon-reload 2>/dev/null || true
-            sudo systemctl enable --now warp-svc.service 2>/dev/null || sudo systemctl start warp-svc.service 2>/dev/null || sudo /usr/bin/warp-svc >/dev/null 2>&1 &
-
-            for i in $(seq 1 5); do
-              if pgrep -f warp-svc >/dev/null; then
-                echo "✅ warp-svc daemon running"
-                break
-              fi
-              sleep 1
-            done
-
-            # 5. Register and connect
-            warp-cli --accept-tos registration new 2>/dev/null || warp-cli registration new 2>/dev/null || warp-cli --accept-tos register 2>/dev/null || warp-cli register 2>/dev/null || true
-            warp-cli --accept-tos mode warp 2>/dev/null || warp-cli mode warp 2>/dev/null || warp-cli --accept-tos set-mode warp 2>/dev/null || warp-cli set-mode warp 2>/dev/null || true
-            warp-cli --accept-tos connect 2>/dev/null || warp-cli connect 2>/dev/null || true
-
-            CONNECTED=false
-            for i in $(seq 1 12); do
-              STATUS=$(warp-cli --accept-tos status 2>/dev/null || warp-cli status 2>/dev/null || echo "Unknown")
-              echo "WARP status ($i/12): $STATUS"
-              if echo "$STATUS" | grep -qi "Connected"; then
-                CONNECTED=true
-                echo "🎉 WARP connected successfully!"
-                break
-              fi
-              sleep 1
-            done
-
-            # 6. Verify routing or fallback to proxy mode
-            NEW_IP=$(curl -s --connect-timeout 5 https://api.ipify.org || echo "")
-            if [ "$CONNECTED" != "true" ] || [ "$NEW_IP" = "$OLD_IP" ] || [ -z "$NEW_IP" ]; then
-              echo "⚠️ TUN mode not routing, switching to WARP proxy mode..."
-              warp-cli --accept-tos mode proxy 2>/dev/null || warp-cli mode proxy 2>/dev/null || warp-cli --accept-tos set-mode proxy 2>/dev/null || warp-cli set-mode proxy 2>/dev/null || true
-              warp-cli --accept-tos connect 2>/dev/null || warp-cli connect 2>/dev/null || true
-              sleep 2
-              PROXY_IP=$(curl -s --socks5 127.0.0.1:40000 --connect-timeout 5 https://api.ipify.org || echo "")
-              if [ -n "$PROXY_IP" ] && [ "$PROXY_IP" != "$OLD_IP" ]; then
-                echo "✅ SOCKS5 proxy active on 127.0.0.1:40000 (IP: $PROXY_IP)"
-                echo "HTTP_PROXY=socks5://127.0.0.1:40000" >> $GITHUB_ENV
-                echo "HTTPS_PROXY=socks5://127.0.0.1:40000" >> $GITHUB_ENV
-                echo "ALL_PROXY=socks5://127.0.0.1:40000" >> $GITHUB_ENV
-              fi
-            fi
-          else
-            echo "⚠️ Cloudflare WARP package not available, continuing with direct runner IP..."
-          fi
-
+            echo "⏳ Waiting for WARP tunnel... ($i/10)"
+            sleep 2
+          done
           echo "=================================================="
           echo "🚀 IP AFTER WARP: $(curl -s https://api.ipify.org || curl -s https://ifconfig.me || echo 'Unknown')"
           echo "=================================================="
-
+ 
       # 4. Compute Date Code (Tomorrow IST)
       - name: Compute Date Code
         run: |
