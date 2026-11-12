@@ -153,9 +153,7 @@ jobs:
             PROXY_IP=$(curl -s --socks5 127.0.0.1:40000 --connect-timeout 5 https://api.ipify.org || echo "")
             if [ -n "$PROXY_IP" ] && [ "$PROXY_IP" != "$OLD_IP" ]; then
               echo "✅ SOCKS5 proxy active on 127.0.0.1:40000 (IP: $PROXY_IP)"
-              echo "HTTP_PROXY=socks5://127.0.0.1:40000" >> $GITHUB_ENV
-              echo "HTTPS_PROXY=socks5://127.0.0.1:40000" >> $GITHUB_ENV
-              echo "ALL_PROXY=socks5://127.0.0.1:40000" >> $GITHUB_ENV
+
               export HTTP_PROXY="socks5://127.0.0.1:40000"
               export HTTPS_PROXY="socks5://127.0.0.1:40000"
               export ALL_PROXY="socks5://127.0.0.1:40000"
@@ -185,6 +183,9 @@ jobs:
       # 6. Run Scraper Shard (bms_advance_uc.py / district_advance.py)
       - name: Run Scraper Shard
         run: |
+          export HTTP_PROXY="socks5://127.0.0.1:40000"
+          export HTTPS_PROXY="socks5://127.0.0.1:40000"
+          export ALL_PROXY="socks5://127.0.0.1:40000" 
           export DATA_DIR="$(pwd)/shards_repo/data"
           cd code_repo
 
