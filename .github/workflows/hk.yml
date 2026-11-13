@@ -1,0 +1,87 @@
+name: Hong Kong Box Office Tracker
+
+on:
+
+  workflow_dispatch:
+
+# 🔥 Prevent overlapping runs
+concurrency:
+  group: hongkong-tracker-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  update-hongkong:
+    runs-on: ubuntu-latest
+
+    env:
+      REPO: MintBox04/hongkong
+
+    steps:
+      # 🔒 Clone Private Repo
+      - name: Clone Private Repo
+        run: |
+          git clone --depth=1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git
+
+      # 🐍 Setup Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.1"
+
+      # 📦 Install dependencies
+      - name: Install dependencies
+        run: |
+          cd hongkong
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+          pip install requests pytz
+
+      # 🚀 Run Hong Kong tracker
+      - name: Run tracker
+        run: |
+          cd hongkong
+          if [ -f "hk.py" ]; then
+            python hk.py
+          else
+            echo "❌ hk.py not found!"
+            exit 1
+          fi
+
+      # 💾 Commit & Push Changes
+      - name: Commit and push changes
+        run: |
+          cd hongkong
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # 🧹 Clean up pycache
+          find . -name "*.pyc" -delete || true
+          find . -name "__pycache__" -type d -exec rm -rf {} + || true
+
+          git add data/movies.json
+
+          if git diff --staged --quiet; then
+            echo "No data changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Update HK data ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))"
+
+          for i in {1..5}; do
+            echo "Push attempt $i"
+
+            git pull --rebase --autostash origin main || true
+
+            if git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.REPO }}.git; then
+              echo "✅ Push succeeded"
+              break
+            fi
+
+            echo "❌ Push failed. Retrying in 5 seconds..."
+            sleep 5
+          done
