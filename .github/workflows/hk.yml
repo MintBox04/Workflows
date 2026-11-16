@@ -1,7 +1,6 @@
 name: Hong Kong Box Office Tracker
 
 on:
-
   workflow_dispatch:
 
 # 🔥 Prevent overlapping runs
@@ -14,7 +13,8 @@ permissions:
 
 jobs:
   update-hongkong:
-    runs-on: ubuntu-latest
+    # Pin to Ubuntu 24.04 because Python 3.12.1 is not available on Ubuntu 26.04
+    runs-on: ubuntu-24.04
 
     env:
       REPO: MintBox04/hongkong
