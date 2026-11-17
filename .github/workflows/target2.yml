@@ -1,4 +1,4 @@
-name: TARGET DATE 2
+name: TARGET DATE 1
 
 on:
   workflow_dispatch:
