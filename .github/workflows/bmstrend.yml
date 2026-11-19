@@ -1,8 +1,6 @@
 name: ALL-INDIA THEATRICAL HOURLY TREND TRACKER (BMS & DISTRICT)
 
-on:
-  schedule:
-    - cron: '10 * * * *'  # Runs every hour at 10 minutes past the hour
+on:  # Runs every hour at 10 minutes past the hour
   workflow_dispatch:
 
 concurrency:
@@ -25,9 +23,11 @@ jobs:
           - shard: 1
             platform: "bms"
             name: "BookMyShow"
+            out_dir: "bms"
           - shard: 2
             platform: "district"
             name: "Zomato District"
+            out_dir: "disct"
 
     steps:
       # -------------------------------------------------
@@ -192,12 +192,14 @@ jobs:
             exit 1
           fi
 
-          echo "🚀 Executing $SCRIPT_PATH for ${{ matrix.name }} (platform: ${{ matrix.platform }})..."
-          python "$SCRIPT_PATH" --output-dir data --platform "${{ matrix.platform }}"
+          echo "🚀 Executing $SCRIPT_PATH for ${{ matrix.name }} (platform: ${{ matrix.platform }} -> data/${{ matrix.out_dir }})..."
+          python "$SCRIPT_PATH" --output-dir "data/${{ matrix.out_dir }}" --platform "${{ matrix.platform }}"
 
           # Ensure dashboard is copied to root index.html if present
           if [ -f "data/dashboard.html" ]; then
             cp data/dashboard.html index.html
+          elif [ -f "data/${{ matrix.out_dir }}/dashboard.html" ]; then
+            cp "data/${{ matrix.out_dir }}/dashboard.html" index.html
           elif [ -f "bmstrend/index.html" ]; then
             cp bmstrend/index.html index.html
           fi
@@ -211,17 +213,22 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add data/ index.html || git add .
+          # Strictly stage this shard's directory to eliminate binary git merge conflicts
+          git add "data/${{ matrix.out_dir }}/"
+          if [ -f "index.html" ]; then
+            git add index.html || true
+          fi
           git commit -m "Update ${{ matrix.name }} Trends ($DATE_CODE - $(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes to commit"
 
           for i in {1..20}; do
             echo "Push attempt $i to ${{ env.DATA_REPO }}..."
-            git pull --rebase --autostash origin main || true
             if git push origin main; then
               echo "✅ ${{ matrix.name }} trend data successfully pushed to ${{ env.DATA_REPO }}"
               break
             fi
-            sleep 5
+            # Use -X theirs so concurrent shard pushes never conflict on disjoint paths
+            git pull --rebase -X theirs origin main || git pull --rebase --autostash origin main || true
+            sleep 4
           done
 
       # -------------------------------------------------
