@@ -1,13 +1,12 @@
-name: BMS HOURLY TREND TRACKER
+name: ALL-INDIA THEATRICAL HOURLY TREND TRACKER (BMS & DISTRICT)
 
 on:
   schedule:
-    # Runs every hour at minute 2 (between 0 and 5 minutes)
-    - cron: "2 * * * *"
+    - cron: '10 * * * *'  # Runs every hour at 10 minutes past the hour
   workflow_dispatch:
 
 concurrency:
-  group: bms-hourly-trend-${{ github.ref }}
+  group: theatrical-hourly-trend-${{ github.ref }}
   cancel-in-progress: false
 
 # 🌍 GLOBAL ENV - SINGLE REPOSITORY CONFIGURATION (Code & Data in bmsTrend)
@@ -16,8 +15,19 @@ env:
 
 jobs:
   track_trend:
-    name: Track BMS Hourly Trends (All-India)
+    name: Track ${{ matrix.name }} (Shard ${{ matrix.shard }}/2)
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+        include:
+          - shard: 1
+            platform: "bms"
+            name: "BookMyShow"
+          - shard: 2
+            platform: "district"
+            name: "Zomato District"
 
     steps:
       # -------------------------------------------------
@@ -34,7 +44,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install cloudscraper
+          pip install cloudscraper curl-cffi "requests[socks]"
 
       # -------------------------------------------------
       # 3. Compute Date Code (IST)
@@ -46,7 +56,111 @@ jobs:
           echo "🎯 Target Date Code: $DATE_CODE"
 
       # -------------------------------------------------
-      # 4. Clone Repository (MintBox04/bmsTrend)
+      # 4. Setup Cloudflare WARP (Clean / Residential IP with SOCKS fallback)
+      # -------------------------------------------------
+      - name: Setup Cloudflare WARP
+        if: matrix.shard != 2
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          echo "=================================================="
+          OLD_IP=$(curl -s --connect-timeout 5 https://api.ipify.org || curl -s https://ifconfig.me || echo 'Unknown')
+          echo "📍 IP BEFORE WARP: $OLD_IP"
+          echo "=================================================="
+
+          # 1. Fallback DNS
+          echo "nameserver 1.1.1.1" | sudo tee -a /etc/resolv.conf >/dev/null 2>&1 || true
+          echo "nameserver 8.8.8.8" | sudo tee -a /etc/resolv.conf >/dev/null 2>&1 || true
+
+          # 2. Clone wrapcdn repo containing pre-downloaded deb packages
+          if [ ! -d "/tmp/wrapcdn" ]; then
+            git clone --depth 1 https://github.com/MintBox04/wrapcdn.git /tmp/wrapcdn
+          fi
+
+          # 3. Locate local deb (Zero live downloads!)
+          DISTRO=$(lsb_release -cs 2>/dev/null || echo "jammy")
+          if [ -s "/tmp/wrapcdn/cloudflare-warp_${DISTRO}_amd64.deb" ]; then
+            WARP_DEB="/tmp/wrapcdn/cloudflare-warp_${DISTRO}_amd64.deb"
+          else
+            WARP_DEB="/tmp/wrapcdn/cloudflare-warp.deb"
+          fi
+          echo "📦 Using local package: $WARP_DEB"
+
+          # 4. Direct install bypassing APT index & mirror dependencies (including TSS2 libraries)
+          sudo dpkg -i --force-depends /tmp/wrapcdn/libtss2*.deb "$WARP_DEB" 2>/dev/null || true
+          sudo dpkg --configure cloudflare-warp 2>/dev/null || true
+          sudo ldconfig 2>/dev/null || true
+
+          # 5. Start D-Bus & Daemon manually
+          sudo mkdir -p /run/dbus /var/lib/cloudflare-warp /etc/cloudflare-warp
+          sudo dbus-uuidgen --ensure 2>/dev/null || true
+          sudo dbus-daemon --system --fork 2>/dev/null || sudo service dbus start 2>/dev/null || true
+          sleep 1
+
+          sudo systemctl start warp-svc 2>/dev/null || sudo service warp-svc start 2>/dev/null || true
+          if ! pgrep -x warp-svc >/dev/null 2>&1; then
+            sudo /bin/warp-svc > /tmp/warp-svc.log 2>&1 &
+          fi
+
+          for i in {1..15}; do
+            if pgrep -x warp-svc >/dev/null 2>&1 || warp-cli --accept-tos status 2>&1 | grep -qE "Status|Registration|Connected|Disconnected"; then
+              echo "✅ warp-svc is ready ($i/15)."
+              break
+            fi
+            sleep 1
+          done
+
+          if ! pgrep -x warp-svc >/dev/null 2>&1; then
+            echo "❌ warp-svc failed to start! Debug logs:"
+            cat /tmp/warp-svc.log 2>/dev/null || true
+            sudo journalctl -u warp-svc -n 20 --no-pager 2>/dev/null || true
+          fi
+
+          # 6. Registration & Connection
+          warp-cli --accept-tos registration new 2>/dev/null || warp-cli registration new 2>/dev/null || warp-cli --accept-tos register 2>/dev/null || warp-cli register 2>/dev/null || true
+          sleep 1
+          warp-cli --accept-tos mode warp 2>/dev/null || warp-cli mode warp 2>/dev/null || warp-cli --accept-tos set-mode warp 2>/dev/null || warp-cli set-mode warp 2>/dev/null || true
+          warp-cli --accept-tos connect 2>/dev/null || warp-cli connect 2>/dev/null || true
+
+          for i in {1..12}; do
+            STATUS=$(warp-cli --accept-tos status 2>/dev/null || warp-cli status 2>/dev/null || echo "")
+            if echo "$STATUS" | grep -qi "connected"; then
+              echo "✅ WARP tunnel connected successfully ($i/12)!"
+              break
+            fi
+            sleep 1
+          done
+
+          # 7. SOCKS Proxy fallback if TUN mode doesn't route on Azure VM
+          NEW_IP=$(curl -s --connect-timeout 5 https://api.ipify.org || echo "")
+          if [ -z "$NEW_IP" ] || [ "$NEW_IP" = "$OLD_IP" ]; then
+            echo "⚠️ TUN mode not routing, switching to WARP SOCKS proxy mode..."
+            warp-cli --accept-tos mode proxy 2>/dev/null || warp-cli mode proxy 2>/dev/null || warp-cli --accept-tos set-mode proxy 2>/dev/null || warp-cli set-mode proxy 2>/dev/null || true
+            warp-cli --accept-tos connect 2>/dev/null || warp-cli connect 2>/dev/null || true
+            sleep 2
+            PROXY_IP=$(curl -s --socks5 127.0.0.1:40000 --connect-timeout 5 https://api.ipify.org || echo "")
+            if [ -n "$PROXY_IP" ] && [ "$PROXY_IP" != "$OLD_IP" ]; then
+              echo "✅ SOCKS5 proxy active on 127.0.0.1:40000 (IP: $PROXY_IP)"
+
+              # Export and persist to GitHub Actions environment for all steps!
+              echo "HTTP_PROXY=socks5://127.0.0.1:40000" >> $GITHUB_ENV
+              echo "HTTPS_PROXY=socks5://127.0.0.1:40000" >> $GITHUB_ENV
+              echo "ALL_PROXY=socks5://127.0.0.1:40000" >> $GITHUB_ENV
+              echo "http_proxy=socks5://127.0.0.1:40000" >> $GITHUB_ENV
+              echo "https_proxy=socks5://127.0.0.1:40000" >> $GITHUB_ENV
+              echo "all_proxy=socks5://127.0.0.1:40000" >> $GITHUB_ENV
+            else
+              echo "⚠️ SOCKS5 proxy check: PROXY_IP='$PROXY_IP'"
+            fi
+          fi
+
+          FINAL_IP=$(curl -s --connect-timeout 5 https://api.ipify.org || curl -s https://ifconfig.me || echo "$OLD_IP")
+          echo "=================================================="
+          echo "🚀 IP AFTER WARP: $FINAL_IP"
+          echo "=================================================="
+
+      # -------------------------------------------------
+      # 5. Clone Repository (MintBox04/bmsTrend)
       # -------------------------------------------------
       - name: Clone bmsTrend Repository
         run: |
@@ -56,18 +170,19 @@ jobs:
           ls -la
 
       # -------------------------------------------------
-      # 5. Run Trend Tracker Inside Repository
+      # 6. Run Multi-Platform Trend Tracker (Shard Execution)
       # -------------------------------------------------
-      - name: Run Trend Tracker
+      - name: Run ${{ matrix.name }} Trend Tracker
         run: |
           cd bms_repo
 
-          # Locate trend.py inside bms_repo
           SCRIPT_PATH=""
           if [ -f "bmstrend/trend.py" ]; then
             SCRIPT_PATH="bmstrend/trend.py"
           elif [ -f "trend.py" ]; then
             SCRIPT_PATH="trend.py"
+          elif [ -f "IndiaTrend/trend.py" ]; then
+            SCRIPT_PATH="IndiaTrend/trend.py"
           else
             SCRIPT_PATH=$(find . -name "trend.py" | head -n 1)
           fi
@@ -77,10 +192,10 @@ jobs:
             exit 1
           fi
 
-          echo "🚀 Executing $SCRIPT_PATH..."
-          python "$SCRIPT_PATH" --output-dir data
+          echo "🚀 Executing $SCRIPT_PATH for ${{ matrix.name }} (platform: ${{ matrix.platform }})..."
+          python "$SCRIPT_PATH" --output-dir data --platform "${{ matrix.platform }}"
 
-          # Ensure dashboard is copied to root index.html
+          # Ensure dashboard is copied to root index.html if present
           if [ -f "data/dashboard.html" ]; then
             cp data/dashboard.html index.html
           elif [ -f "bmstrend/index.html" ]; then
@@ -88,7 +203,7 @@ jobs:
           fi
 
       # -------------------------------------------------
-      # 6. Commit & Push Data to MintBox04/bmsTrend (Auto-Rebase Retry)
+      # 7. Commit & Push Data with Auto-Rebase Retry Loop
       # -------------------------------------------------
       - name: Push Data to MintBox04/bmsTrend
         run: |
@@ -97,20 +212,20 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add data/ index.html || git add .
-          git commit -m "Update BMS Hourly Trends ($DATE_CODE - $(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes to commit"
+          git commit -m "Update ${{ matrix.name }} Trends ($DATE_CODE - $(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes to commit"
 
           for i in {1..20}; do
             echo "Push attempt $i to ${{ env.DATA_REPO }}..."
             git pull --rebase --autostash origin main || true
             if git push origin main; then
-              echo "✅ Final BMS trend data successfully pushed to ${{ env.DATA_REPO }}"
+              echo "✅ ${{ matrix.name }} trend data successfully pushed to ${{ env.DATA_REPO }}"
               break
             fi
             sleep 5
           done
 
       # -------------------------------------------------
-      # 7. Fast Direct Deploy to Cloudflare Pages (Optional)
+      # 8. Fast Direct Deploy to Cloudflare Pages (Optional)
       # -------------------------------------------------
       - name: Deploy to Cloudflare Pages
         if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
