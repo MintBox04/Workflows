@@ -1,8 +1,15 @@
 name: MOVIE TELEMETRY PIPELINE
 
 on:
+  schedule:
+    # Run high-speed incremental update every 30 minutes automatically
+    - cron: "*/30 * * * *"
   workflow_dispatch:
-  
+    inputs:
+      target_dates:
+        description: "Custom target date codes (e.g. 20261217) or leave empty to fetch dynamically from GitHub"
+        required: false
+        default: ""
 
 concurrency:
   group: movie-telemetry-${{ github.ref }}
@@ -48,6 +55,7 @@ jobs:
       - name: Run Telemetry Live Update
         run: |
           cd repo
+          export DATA_DIR="$(pwd)"
           if [ -n "${{ github.event.inputs.target_dates }}" ]; then
             export FUTURE_TARGET_DATES="${{ github.event.inputs.target_dates }}"
           fi
@@ -66,9 +74,10 @@ jobs:
 
           # Remove plain index.json if it ever exists (strictly .json.br only)
           rm -f index.json || true
+          rm -rf LogsMain || true
 
           # Stage index.json.br and movies/*.json.br
-          git add index.json.br movies/
+          git add index.json.br movies/ .gitignore
 
           CURRENT_TIME=$(date -u +'%Y-%m-%d %H:%M:%S UTC')
           git commit -m "Auto-update telemetry: today, tomo & target date - $CURRENT_TIME [skip ci]" || echo "No changes to commit"
@@ -93,15 +102,18 @@ jobs:
           echo "📦 Publishing Live Assets to GitHub Release 'latest' in ${{ env.DATA_REPO }}"
           echo "=================================================="
 
-          # Create release if it doesn't exist, or upload with clobber to overwrite
-          gh release create latest index.json.br movies/*.json.br \
-            --repo "${{ env.DATA_REPO }}" \
-            --title "Live Box Office Telemetry" \
-            --notes "Auto-updated telemetry for Today (Daily/Adv), Tomorrow (Adv) and Target Date." \
-            --clobber || \
-          gh release upload latest index.json.br movies/*.json.br \
-            --repo "${{ env.DATA_REPO }}" \
-            --clobber
+          if gh release view latest --repo "${{ env.DATA_REPO }}" >/dev/null 2>&1; then
+            echo "Release 'latest' exists. Uploading/updating assets..."
+            gh release upload latest index.json.br movies/*.json.br \
+              --repo "${{ env.DATA_REPO }}" \
+              --clobber
+          else
+            echo "Creating new release 'latest'..."
+            gh release create latest index.json.br movies/*.json.br \
+              --repo "${{ env.DATA_REPO }}" \
+              --title "Live Box Office Telemetry" \
+              --notes "Auto-updated telemetry for Today (Daily/Adv), Tomorrow (Adv) and Target Date."
+          fi
 
       # 7. Fast Direct Deploy to Cloudflare Pages (allindialogsmain.pages.dev)
       - name: Deploy to Cloudflare Pages
