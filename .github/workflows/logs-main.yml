@@ -1,15 +1,8 @@
 name: MOVIE TELEMETRY PIPELINE
 
 on:
-  schedule:
-    # Run high-speed incremental update every 30 minutes automatically
-    - cron: "*/30 * * * *"
+ 
   workflow_dispatch:
-    inputs:
-      target_dates:
-        description: "Custom target date codes (e.g. 20261217) or leave empty to fetch dynamically from GitHub"
-        required: false
-        default: ""
 
 concurrency:
   group: movie-telemetry-${{ github.ref }}
