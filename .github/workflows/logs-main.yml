@@ -1,0 +1,97 @@
+name: MOVIE TELEMETRY PIPELINE
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: movie-telemetry-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  telemetry:
+    runs-on: ubuntu-24.04
+
+    steps:
+      # 1. Checkout repository directly
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+
+      # 2. Setup Python environment
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # 3. Install required libraries
+      - name: Install dependencies
+        run: |
+          pip install brotli pytz
+
+      # 4. Execute Incremental Update (Today, Tomorrow, Target Date)
+      - name: Run Telemetry Live Update
+        run: |
+          if [ -n "${{ github.event.inputs.target_dates }}" ]; then
+            export FUTURE_TARGET_DATES="${{ github.event.inputs.target_dates }}"
+          fi
+
+          echo "=================================================="
+          echo "🚀 Running Telemetry Live Update (Today, Tomorrow, Target Date)"
+          echo "=================================================="
+          python telemetry_incremental_update.py
+
+      # 5. Commit and push updated .json.br telemetry files to repo
+      - name: Commit & Push Telemetry Data to Repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Remove plain index.json if it ever exists
+          rm -f index.json || true
+
+          # Stage index.json.br and movies/*.json.br
+          git add index.json.br movies/
+
+          git commit -m "Auto-update telemetry: today, tomo & target date [skip ci]" || echo "No changes to commit"
+
+          for i in {1..10}; do
+            echo "Push attempt $i..."
+            git pull --rebase --autostash origin main || true
+            if git push origin main; then
+              echo "✅ Telemetry data successfully pushed to repository!"
+              break
+            fi
+            sleep 3
+          done
+
+      # 6. Publish / Update Release Assets (Release 'latest')
+      - name: Update GitHub Release Assets
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          echo "=================================================="
+          echo "📦 Publishing Live Assets to GitHub Release 'latest'"
+          echo "=================================================="
+
+          # Create release if it doesn't exist, or upload with clobber to overwrite
+          gh release create latest index.json.br movies/*.json.br \
+            --title "Live Box Office Telemetry" \
+            --notes "Auto-updated telemetry for Today (Daily/Adv), Tomorrow (Adv) and Target Date." \
+            --clobber || \
+          gh release upload latest index.json.br movies/*.json.br --clobber
+
+      # 7. Fast Direct Deploy to Cloudflare Pages (allindialogsmain.pages.dev)
+      - name: Deploy to Cloudflare Pages
+        if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+        continue-on-error: true
+        run: |
+          npx wrangler pages project create allindialogsmain --production-branch=main || true
+          npx wrangler pages deploy . --project-name=allindialogsmain --branch=main --commit-dirty=true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
